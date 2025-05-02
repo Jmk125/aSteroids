@@ -327,6 +327,7 @@ class Bullet:
         self.lifetime = 90  # Adjusted for larger play area
         self.is_nuke = is_nuke
         self.color = GREY if is_nuke else WHITE
+        self.prev_position = [x - vx, y - vy]  # Store previous position for continuous collision detection
         
     def draw(self):
         if self.is_nuke:
@@ -340,6 +341,10 @@ class Bullet:
             pygame.draw.circle(game_surface, self.color, (int(self.position[0]), int(self.position[1])), self.radius)
         
     def update(self):
+        # Store previous position for collision detection
+        self.prev_position[0] = self.position[0]
+        self.prev_position[1] = self.position[1]
+        
         # Update position
         self.position[0] += self.velocity[0]
         self.position[1] += self.velocity[1]
@@ -347,13 +352,17 @@ class Bullet:
         # Wrap around screen edges
         if self.position[0] < 0:
             self.position[0] = WIDTH
+            self.prev_position[0] = WIDTH - 1  # Adjust prev_position for wrapped bullets
         elif self.position[0] > WIDTH:
             self.position[0] = 0
+            self.prev_position[0] = 1  # Adjust prev_position for wrapped bullets
             
         if self.position[1] < 0:
             self.position[1] = HEIGHT
+            self.prev_position[1] = HEIGHT - 1  # Adjust prev_position for wrapped bullets
         elif self.position[1] > HEIGHT:
             self.position[1] = 0
+            self.prev_position[1] = 1  # Adjust prev_position for wrapped bullets
             
         # Decrease lifetime
         self.lifetime -= 1
@@ -366,6 +375,36 @@ class Bullet:
                             (self.position[1] - asteroid.position[1])**2)
         return distance < self.radius + asteroid.radius
 
+    def line_collision(self, asteroid):
+        # Calculate vector from previous to current position
+        dx = self.position[0] - self.prev_position[0]
+        dy = self.position[1] - self.prev_position[1]
+        
+        # Calculate coefficients for line-circle intersection
+        a = dx*dx + dy*dy
+        
+        # If bullet didn't move, use standard collision check
+        if a < 0.0001:
+            return self.check_collision(asteroid)
+        
+        b = 2 * (dx * (self.prev_position[0] - asteroid.position[0]) + 
+                 dy * (self.prev_position[1] - asteroid.position[1]))
+        c = (self.prev_position[0] - asteroid.position[0])**2 + \
+            (self.prev_position[1] - asteroid.position[1])**2 - \
+            (asteroid.radius + self.radius)**2
+        
+        discriminant = b*b - 4*a*c
+        
+        if discriminant < 0:
+            return False  # No intersection
+        
+        # Find the values of t where the line intersects the circle
+        t1 = (-b + math.sqrt(discriminant)) / (2*a)
+        t2 = (-b - math.sqrt(discriminant)) / (2*a)
+        
+        # Check if intersection is within the current frame's movement
+        return (0 <= t1 <= 1) or (0 <= t2 <= 1)
+
 class LaserBeam:
     def __init__(self, player):
         self.player = player
@@ -374,6 +413,15 @@ class LaserBeam:
         self.length = 3000  # Long enough to reach across the screen
         self.color = YELLOW
         
+        # Calculate and store beam line segment for collision detection
+        angle = math.radians(player.rotation)
+        self.start_x = player.position[0]
+        self.start_y = player.position[1]
+        self.dx = math.cos(angle)
+        self.dy = math.sin(angle)
+        self.end_x = self.start_x + self.length * self.dx
+        self.end_y = self.start_y + self.length * self.dy
+        
     def draw(self):
         angle = math.radians(self.player.rotation)
         start_x = self.player.position[0] + self.player.radius * math.cos(angle)
@@ -381,6 +429,14 @@ class LaserBeam:
         
         end_x = start_x + self.length * math.cos(angle)
         end_y = start_y + self.length * math.sin(angle)
+        
+        # Update beam position (these are used for collision detection)
+        self.start_x = self.player.position[0]
+        self.start_y = self.player.position[1]
+        self.dx = math.cos(angle)
+        self.dy = math.sin(angle)
+        self.end_x = self.start_x + self.length * self.dx
+        self.end_y = self.start_y + self.length * self.dy
         
         # Draw the main laser beam
         pygame.draw.line(game_surface, self.color, (start_x, start_y), (end_x, end_y), self.width)
@@ -406,37 +462,72 @@ class LaserBeam:
     def update(self):
         self.duration -= 1
         return self.duration <= 0  # Return True when laser is finished
+    
+    def point_to_line_distance(self, point_x, point_y, line_x1, line_y1, line_x2, line_y2):
+        """Calculate shortest distance from a point to a line segment"""
+        # Line length squared
+        line_length_sq = (line_x2 - line_x1)**2 + (line_y2 - line_y1)**2
         
-    def check_collision(self, asteroid):
-        # Calculate laser line
-        angle = math.radians(self.player.rotation)
-        start_x = self.player.position[0]
-        start_y = self.player.position[1]
+        # If line has zero length, return distance to one endpoint
+        if line_length_sq == 0:
+            return math.sqrt((point_x - line_x1)**2 + (point_y - line_y1)**2)
         
-        # Calculate distance from asteroid center to laser line
-        dx = math.cos(angle)
-        dy = math.sin(angle)
+        # Calculate projection of point onto line
+        t = max(0, min(1, ((point_x - line_x1) * (line_x2 - line_x1) + 
+                           (point_y - line_y1) * (line_y2 - line_y1)) / line_length_sq))
         
-        # Vector from start to asteroid
-        ax = asteroid.position[0] - start_x
-        ay = asteroid.position[1] - start_y
+        # Find closest point on line
+        proj_x = line_x1 + t * (line_x2 - line_x1)
+        proj_y = line_y1 + t * (line_y2 - line_y1)
         
-        # Project asteroid vector onto laser direction
-        t = ax * dx + ay * dy
+        # Return distance to closest point
+        return math.sqrt((point_x - proj_x)**2 + (point_y - proj_y)**2)
         
-        # Closest point on line to asteroid
-        closest_x = start_x + t * dx
-        closest_y = start_y + t * dy
+    def check_collision(self, obj):
+        # Get adjustment factor for small asteroids (wider collision area)
+        width_factor = 2.0 if isinstance(obj, Asteroid) and obj.size == 1 else 1.0
+        effective_width = self.width * width_factor
         
-        # Calculate distance from asteroid to closest point
-        distance = math.sqrt((asteroid.position[0] - closest_x)**2 + 
-                            (asteroid.position[1] - closest_y)**2)
-        
-        # Check if point is actually on the beam (not behind the ship)
-        if t < 0:
-            return False
+        # Check direct collision
+        if self.point_to_line_distance(obj.position[0], obj.position[1], 
+                                      self.start_x, self.start_y, 
+                                      self.end_x, self.end_y) <= (obj.radius + effective_width):
+            return True
             
-        return distance < asteroid.radius + self.width/2
+        # For small asteroids, we need to handle screen wrapping
+        if isinstance(obj, Asteroid) and obj.size == 1:
+            # Create "phantom" positions for screen wrapping cases
+            wrap_positions = []
+            
+            # Check if near screen edges
+            if obj.position[0] < obj.radius * 2:
+                wrap_positions.append((obj.position[0] + WIDTH, obj.position[1]))
+            elif obj.position[0] > WIDTH - obj.radius * 2:
+                wrap_positions.append((obj.position[0] - WIDTH, obj.position[1]))
+                
+            if obj.position[1] < obj.radius * 2:
+                wrap_positions.append((obj.position[0], obj.position[1] + HEIGHT))
+            elif obj.position[1] > HEIGHT - obj.radius * 2:
+                wrap_positions.append((obj.position[0], obj.position[1] - HEIGHT))
+                
+            # Add diagonal wrapping cases
+            if obj.position[0] < obj.radius * 2 and obj.position[1] < obj.radius * 2:
+                wrap_positions.append((obj.position[0] + WIDTH, obj.position[1] + HEIGHT))
+            elif obj.position[0] < obj.radius * 2 and obj.position[1] > HEIGHT - obj.radius * 2:
+                wrap_positions.append((obj.position[0] + WIDTH, obj.position[1] - HEIGHT))
+            elif obj.position[0] > WIDTH - obj.radius * 2 and obj.position[1] < obj.radius * 2:
+                wrap_positions.append((obj.position[0] - WIDTH, obj.position[1] + HEIGHT))
+            elif obj.position[0] > WIDTH - obj.radius * 2 and obj.position[1] > HEIGHT - obj.radius * 2:
+                wrap_positions.append((obj.position[0] - WIDTH, obj.position[1] - HEIGHT))
+                
+            # Check all wrap positions
+            for pos_x, pos_y in wrap_positions:
+                if self.point_to_line_distance(pos_x, pos_y, 
+                                             self.start_x, self.start_y, 
+                                             self.end_x, self.end_y) <= (obj.radius + effective_width):
+                    return True
+                    
+        return False
 
 class Player:
     def __init__(self):
@@ -920,9 +1011,9 @@ def draw_title_screen(background_asteroids, selected_button_index=0):
     start_button.draw()
     scores_button.draw()
     
-    # Update asteroids
-    for asteroid in background_asteroids:
-        asteroid.update()
+    # Draw version number in bottom left corner
+    version_text = pygame.font.Font(None, 24).render("v0.41", True, GREY)
+    game_surface.blit(version_text, (10, HEIGHT - version_text.get_height() - 10))
     
     # Return button objects for event handling
     return start_button, scores_button
@@ -934,7 +1025,6 @@ def draw_high_scores_screen(scores, background_asteroids):
     # Draw background asteroids
     for asteroid in background_asteroids:
         asteroid.draw()
-        asteroid.update()
     
     # Draw title
     title_text = big_font.render("High Scores", True, WHITE)
@@ -967,7 +1057,6 @@ def draw_name_input_screen(score, text_input, background_asteroids):
     # Draw background asteroids
     for asteroid in background_asteroids:
         asteroid.draw()
-        asteroid.update()
     
     # Draw title
     title_text = big_font.render("Game Over", True, RED)
@@ -1042,6 +1131,11 @@ def main():
         current_time = pygame.time.get_ticks()
         mouse_pos = pygame.mouse.get_pos()
         
+        # FIX 2: Always update background asteroids for menu states
+        if game_state in [TITLE_SCREEN, HIGH_SCORES, NAME_INPUT]:
+            for asteroid in background_asteroids:
+                asteroid.update()
+        
         # Handle events
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
@@ -1049,8 +1143,6 @@ def main():
                 
             # Handle title screen events
             if game_state == TITLE_SCREEN:
-                start_button, scores_button = draw_title_screen(background_asteroids, selected_button_index)
-                
                 if event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_UP or event.key == pygame.K_DOWN:
                         # Toggle between buttons
@@ -1084,6 +1176,7 @@ def main():
                         running = False
                 
                 if event.type == pygame.MOUSEBUTTONDOWN:
+                    start_button, scores_button = draw_title_screen(background_asteroids, selected_button_index)
                     if start_button.is_clicked(mouse_pos, event):
                         # Start a new game
                         player = Player()
@@ -1111,38 +1204,33 @@ def main():
             
             # Handle high scores screen events
             elif game_state == HIGH_SCORES:
-                high_scores = get_high_scores(db_path)
-                back_button = draw_high_scores_screen(high_scores, background_asteroids)
-                
                 if event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_RETURN or event.key == pygame.K_SPACE or event.key == pygame.K_ESCAPE:
                         game_state = TITLE_SCREEN
                         selected_button_index = 0  # Reset to Start Game being selected
                 
                 if event.type == pygame.MOUSEBUTTONDOWN:
+                    high_scores = get_high_scores(db_path)
+                    back_button = draw_high_scores_screen(high_scores, background_asteroids)
                     if back_button.is_clicked(mouse_pos, event):
                         game_state = TITLE_SCREEN
                         selected_button_index = 0  # Reset to Start Game being selected
             
             # Handle name input screen events
             elif game_state == NAME_INPUT:
-                submit_button = draw_name_input_screen(score, text_input, background_asteroids)
-                
-                # Handle text input
-                name = text_input.handle_event(event)
-                if name:  # Enter key was pressed
-                    if name.strip():  # Name is not empty
-                        save_score(db_path, name, score)
-                        game_state = HIGH_SCORES
+                # FIX 1: Modify this block to avoid double-saving
+                name_submitted = text_input.handle_event(event)
+                if name_submitted and name_submitted.strip():  # Enter key was pressed with valid name
+                    save_score(db_path, name_submitted, score)
+                    game_state = HIGH_SCORES
+                    continue  # Skip the next blocks to avoid double-saving
                 
                 if event.type == pygame.KEYDOWN:
-                    if event.key == pygame.K_RETURN and text_input.text.strip():
-                        save_score(db_path, text_input.text, score)
-                        game_state = HIGH_SCORES
-                    elif event.key == pygame.K_ESCAPE:  # ESC to skip and go to high scores
+                    if event.key == pygame.K_ESCAPE:  # ESC to skip and go to high scores
                         game_state = HIGH_SCORES
                 
                 if event.type == pygame.MOUSEBUTTONDOWN:
+                    submit_button = draw_name_input_screen(score, text_input, background_asteroids)
                     if submit_button.is_clicked(mouse_pos, event):
                         if text_input.text.strip():  # Name is not empty
                             save_score(db_path, text_input.text, score)
@@ -1176,8 +1264,17 @@ def main():
                         game_state = TITLE_SCREEN
                         selected_button_index = 0
         
+        # Draw appropriate screen based on game state
+        if game_state == TITLE_SCREEN:
+            start_button, scores_button = draw_title_screen(background_asteroids, selected_button_index)
+        elif game_state == HIGH_SCORES:
+            high_scores = get_high_scores(db_path)
+            back_button = draw_high_scores_screen(high_scores, background_asteroids)
+        elif game_state == NAME_INPUT:
+            submit_button = draw_name_input_screen(score, text_input, background_asteroids)
+        
         # Only update the game if playing
-        if game_state == GAME_PLAYING:
+        elif game_state == GAME_PLAYING:
             # Clear the surface
             game_surface.fill(BLACK)
             
@@ -1357,9 +1454,16 @@ def main():
                         asteroids.remove(asteroid)
                         continue
                     
-                # Check bullet collisions
+                # FIX 3: Check bullet collisions with enhanced collision detection 
                 for bullet in bullets[:]:
-                    if bullet.check_collision(asteroid):
+                    # Use continuous collision detection for small asteroids
+                    collides = False
+                    if asteroid.size == 1:  # Small asteroid
+                        collides = bullet.line_collision(asteroid)
+                    else:  # Medium or large asteroid
+                        collides = bullet.check_collision(asteroid)
+                        
+                    if collides:
                         # Add score based on asteroid size
                         score += (4 - asteroid.size) * 100
                         
@@ -1545,4 +1649,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-                        
