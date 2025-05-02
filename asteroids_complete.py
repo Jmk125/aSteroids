@@ -4,12 +4,32 @@ import math
 import random
 import sqlite3
 import os
+from datetime import datetime
 
 # Initialize pygame
 pygame.init()
 
-# Constants
-WIDTH, HEIGHT = 800, 600
+# Get the actual display resolution
+info = pygame.display.Info()
+DISPLAY_WIDTH, DISPLAY_HEIGHT = info.current_w, info.current_h
+
+# Game logic uses pixel-perfect dimensions that match your actual screen
+# but maintain the 16:9 aspect ratio
+target_width = DISPLAY_WIDTH
+target_height = int(DISPLAY_WIDTH * 9 / 16)
+
+if target_height > DISPLAY_HEIGHT:
+    # If height is too large, calculate based on height instead
+    target_height = DISPLAY_HEIGHT
+    target_width = int(DISPLAY_HEIGHT * 16 / 9)
+
+WIDTH, HEIGHT = target_width, target_height
+
+# Calculate offsets to center the game on screen
+OFFSET_X = (DISPLAY_WIDTH - WIDTH) // 2
+OFFSET_Y = (DISPLAY_HEIGHT - HEIGHT) // 2
+
+# Colors
 BLACK = (0, 0, 0)
 WHITE = (255, 255, 255)
 RED = (255, 0, 0)
@@ -35,7 +55,8 @@ AFTERIMAGE_FREQUENCY = 5  # Frames between each after-image (lower = more images
 AFTERIMAGE_DURATION = 30  # How long after-images last in frames
 
 # Set up the display
-screen = pygame.display.set_mode((WIDTH, HEIGHT))
+screen = pygame.display.set_mode((DISPLAY_WIDTH, DISPLAY_HEIGHT), pygame.FULLSCREEN)
+game_surface = pygame.Surface((WIDTH, HEIGHT))
 pygame.display.set_caption("aSteroids")
 clock = pygame.time.Clock()
 
@@ -72,7 +93,6 @@ def save_score(db_path, name, score):
     cursor = conn.cursor()
     
     # Get current date and time
-    from datetime import datetime
     date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
     cursor.execute("INSERT INTO high_scores (name, score, date) VALUES (?, ?, ?)",
@@ -105,11 +125,8 @@ class TextInput:
         
     def handle_event(self, event):
         if event.type == pygame.MOUSEBUTTONDOWN:
-            # Toggle active state if clicked
-            if self.rect.collidepoint(event.pos):
-                self.active = True
-            else:
-                self.active = False
+            # No need to convert mouse position since we're at native resolution
+            self.active = self.rect.collidepoint((event.pos[0] - OFFSET_X, event.pos[1] - OFFSET_Y))
                 
         if event.type == pygame.KEYDOWN and self.active:
             if event.key == pygame.K_RETURN:
@@ -130,18 +147,18 @@ class TextInput:
         
     def draw(self):
         # Draw background
-        pygame.draw.rect(screen, BLACK, self.rect)
-        pygame.draw.rect(screen, self.color, self.rect, 2)
+        pygame.draw.rect(game_surface, BLACK, self.rect)
+        pygame.draw.rect(game_surface, self.color, self.rect, 2)
         
         # Draw text
         if self.text:
             text_surface = self.font.render(self.text, True, self.color)
-            screen.blit(text_surface, (self.rect.x + 5, self.rect.y + 5))
+            game_surface.blit(text_surface, (self.rect.x + 5, self.rect.y + 5))
             
         # Draw cursor
         if self.active and self.cursor_visible:
             cursor_pos = self.font.size(self.text)[0] + self.rect.x + 5
-            pygame.draw.line(screen, self.color, 
+            pygame.draw.line(game_surface, self.color, 
                             (cursor_pos, self.rect.y + 5),
                             (cursor_pos, self.rect.y + self.rect.height - 5),
                             2)
@@ -160,13 +177,13 @@ class Button:
     def draw(self):
         # Draw button
         color = self.selected_color if self.is_selected else (self.hover_color if self.is_hovered else self.color)
-        pygame.draw.rect(screen, BLACK, self.rect)
-        pygame.draw.rect(screen, color, self.rect, 2)
+        pygame.draw.rect(game_surface, BLACK, self.rect)
+        pygame.draw.rect(game_surface, color, self.rect, 2)
         
         # Draw text
         text_surface = self.font.render(self.text, True, color)
         text_rect = text_surface.get_rect(center=self.rect.center)
-        screen.blit(text_surface, text_rect)
+        game_surface.blit(text_surface, text_rect)
         
         # Draw selection indicator if selected (triangle)
         if self.is_selected:
@@ -175,15 +192,23 @@ class Button:
                 (self.rect.x - 10, self.rect.centery - 5),
                 (self.rect.x - 10, self.rect.centery + 5)
             ]
-            pygame.draw.polygon(screen, self.selected_color, triangle_points)
+            pygame.draw.polygon(game_surface, self.selected_color, triangle_points)
         
     def check_hover(self, pos):
-        self.is_hovered = self.rect.collidepoint(pos)
+        # Adjust for offset
+        game_x = pos[0] - OFFSET_X
+        game_y = pos[1] - OFFSET_Y
+        
+        self.is_hovered = self.rect.collidepoint((game_x, game_y))
         return self.is_hovered
         
     def is_clicked(self, pos, event):
         if event.type == pygame.MOUSEBUTTONDOWN:
-            if self.rect.collidepoint(pos):
+            # Adjust for offset
+            game_x = pos[0] - OFFSET_X
+            game_y = pos[1] - OFFSET_Y
+            
+            if self.rect.collidepoint((game_x, game_y)):
                 return True
         return False
 
@@ -213,7 +238,7 @@ class AfterImage:
             ))
             
         pygame.draw.polygon(surf, (*self.color, alpha), transformed_points)
-        screen.blit(surf, (0, 0))
+        game_surface.blit(surf, (0, 0))
 
 class PowerUp:
     """Represents a power-up in the game."""
@@ -233,31 +258,31 @@ class PowerUp:
 
     def draw(self):
         # Draw main powerup circle
-        pygame.draw.circle(screen, self.color, (int(self.x), int(self.y)), self.radius)
+        pygame.draw.circle(game_surface, self.color, (int(self.x), int(self.y)), self.radius)
         
         # Draw pulsing outer ring
-        pygame.draw.circle(screen, self.color, (int(self.x), int(self.y)), 
+        pygame.draw.circle(game_surface, self.color, (int(self.x), int(self.y)), 
                           self.radius + self.pulse_size, 1)
         
         # Draw icon inside based on powerup type
         if self.type == 'invincibility':
             # Shield icon
-            pygame.draw.circle(screen, WHITE, (int(self.x), int(self.y)), self.radius-4, 1)
+            pygame.draw.circle(game_surface, WHITE, (int(self.x), int(self.y)), self.radius-4, 1)
         elif self.type == 'laser_beam':
             # Beam icon
-            pygame.draw.line(screen, WHITE, 
+            pygame.draw.line(game_surface, WHITE, 
                            (self.x-self.radius+3, self.y), 
                            (self.x+self.radius-3, self.y), 2)
         elif self.type == 'nuclear_bomb':
             # Bomb icon
-            pygame.draw.circle(screen, WHITE, (int(self.x), int(self.y)), self.radius-4)
-            pygame.draw.line(screen, self.color, 
+            pygame.draw.circle(game_surface, WHITE, (int(self.x), int(self.y)), self.radius-4)
+            pygame.draw.line(game_surface, self.color, 
                            (self.x, self.y-self.radius+3), 
                            (self.x, self.y-3), 2)
         elif self.type == 'rapid_fire':
             # Bullet icon
             for i in range(3):
-                pygame.draw.circle(screen, WHITE, 
+                pygame.draw.circle(game_surface, WHITE, 
                                  (int(self.x-4+i*4), int(self.y)), 2)
 
     def update(self):
@@ -299,20 +324,20 @@ class Bullet:
         self.position = [x, y]
         self.velocity = [vx, vy]
         self.radius = 2
-        self.lifetime = 60  # frames (about 1 second at 60 FPS)
+        self.lifetime = 90  # Adjusted for larger play area
         self.is_nuke = is_nuke
         self.color = GREY if is_nuke else WHITE
         
     def draw(self):
         if self.is_nuke:
             # Draw larger nuke bullet
-            pygame.draw.circle(screen, self.color, (int(self.position[0]), int(self.position[1])), self.radius * 2)
+            pygame.draw.circle(game_surface, self.color, (int(self.position[0]), int(self.position[1])), self.radius * 2)
             # Pulsing effect
             pulse = int(pygame.time.get_ticks() / 100) % 3
-            pygame.draw.circle(screen, RED, (int(self.position[0]), int(self.position[1])), 
+            pygame.draw.circle(game_surface, RED, (int(self.position[0]), int(self.position[1])), 
                               self.radius * 2 + pulse, 1)
         else:
-            pygame.draw.circle(screen, self.color, (int(self.position[0]), int(self.position[1])), self.radius)
+            pygame.draw.circle(game_surface, self.color, (int(self.position[0]), int(self.position[1])), self.radius)
         
     def update(self):
         # Update position
@@ -346,7 +371,7 @@ class LaserBeam:
         self.player = player
         self.duration = 180  # 3 seconds at 60 FPS
         self.width = 5
-        self.length = 2000  # Very long to ensure it reaches screen edges
+        self.length = 3000  # Long enough to reach across the screen
         self.color = YELLOW
         
     def draw(self):
@@ -358,7 +383,7 @@ class LaserBeam:
         end_y = start_y + self.length * math.sin(angle)
         
         # Draw the main laser beam
-        pygame.draw.line(screen, self.color, (start_x, start_y), (end_x, end_y), self.width)
+        pygame.draw.line(game_surface, self.color, (start_x, start_y), (end_x, end_y), self.width)
         
         # Draw glow effect
         for i in range(1, 3):
@@ -366,7 +391,7 @@ class LaserBeam:
             glow_surf = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
             pygame.draw.line(glow_surf, (self.color[0], self.color[1], self.color[2], alpha), 
                           (start_x, start_y), (end_x, end_y), self.width + i * 2)
-            screen.blit(glow_surf, (0, 0))
+            game_surface.blit(glow_surf, (0, 0))
             
         # Draw pulse effect along the beam
         time = pygame.time.get_ticks()
@@ -376,7 +401,7 @@ class LaserBeam:
         
         for i, pos in enumerate(pulse_positions):
             if (i + time // 100) % 3 == 0:  # Makes the pulses move along the beam
-                pygame.draw.circle(screen, WHITE, (int(pos[0]), int(pos[1])), 3)
+                pygame.draw.circle(game_surface, WHITE, (int(pos[0]), int(pos[1])), 3)
         
     def update(self):
         self.duration -= 1
@@ -504,7 +529,7 @@ class Player:
         ]
         
         # Draw the ship
-        pygame.draw.polygon(screen, color, ship_points)
+        pygame.draw.polygon(game_surface, color, ship_points)
         
         # Draw thrust flame if thrusting
         if self.is_thrusting:
@@ -516,7 +541,7 @@ class Player:
                 (self.position[0] - self.radius * cos_val + self.radius/2 * math.cos(angle - math.pi/2), 
                  self.position[1] - self.radius * sin_val + self.radius/2 * math.sin(angle - math.pi/2))
             ]
-            pygame.draw.polygon(screen, BLUE, flame_points)
+            pygame.draw.polygon(game_surface, BLUE, flame_points)
         
     def rotate(self, direction):
         self.rotation += direction * self.rotation_speed
@@ -724,7 +749,7 @@ class Asteroid:
                 self.position[0] + vertex[0],
                 self.position[1] + vertex[1]
             ))
-        pygame.draw.polygon(screen, WHITE, transformed_vertices, 1)
+        pygame.draw.polygon(game_surface, WHITE, transformed_vertices, 1)
         
     def update(self):
         # Update position
@@ -772,11 +797,11 @@ class UFO:
         
     def draw(self):
         # Draw UFO
-        pygame.draw.ellipse(screen, RED, (self.position[0] - self.radius, 
+        pygame.draw.ellipse(game_surface, RED, (self.position[0] - self.radius, 
                                          self.position[1] - self.radius/2,
                                          self.radius*2, self.radius))
         # Draw top dome
-        pygame.draw.ellipse(screen, RED, (self.position[0] - self.radius/2, 
+        pygame.draw.ellipse(game_surface, RED, (self.position[0] - self.radius/2, 
                                          self.position[1] - self.radius,
                                          self.radius, self.radius/2))
         
@@ -848,7 +873,7 @@ class Particle:
         color = (*self.color, alpha) if len(self.color) == 3 else (self.color[0], self.color[1], self.color[2], alpha)
         surf = pygame.Surface((self.size * 2, self.size * 2), pygame.SRCALPHA)
         pygame.draw.circle(surf, color, (self.size, self.size), self.size)
-        screen.blit(surf, (int(self.position[0] - self.size), int(self.position[1] - self.size)))
+        game_surface.blit(surf, (int(self.position[0] - self.size), int(self.position[1] - self.size)))
         
     def is_dead(self):
         return self.lifetime <= 0
@@ -864,7 +889,7 @@ def create_explosion(x, y, size, color=WHITE):
 
 def draw_title_screen(background_asteroids, selected_button_index=0):
     # Clear screen
-    screen.fill(BLACK)
+    game_surface.fill(BLACK)
     
     # Draw background asteroids
     for asteroid in background_asteroids:
@@ -872,11 +897,11 @@ def draw_title_screen(background_asteroids, selected_button_index=0):
     
     # Draw title
     title_text = title_font.render("aSteroids", True, WHITE)
-    screen.blit(title_text, (WIDTH // 2 - title_text.get_width() // 2, 150))
+    game_surface.blit(title_text, (WIDTH // 2 - title_text.get_width() // 2, HEIGHT // 4))
     
     # Create menu buttons
-    start_button = Button(WIDTH // 2 - 100, 300, 200, 50, "Start Game", font)
-    scores_button = Button(WIDTH // 2 - 100, 370, 200, 50, "High Scores", font)
+    start_button = Button(WIDTH // 2 - 100, HEIGHT // 2, 200, 50, "Start Game", font)
+    scores_button = Button(WIDTH // 2 - 100, HEIGHT // 2 + 70, 200, 50, "High Scores", font)
     
     # Set which button is selected based on the index
     if selected_button_index == 0:
@@ -904,7 +929,7 @@ def draw_title_screen(background_asteroids, selected_button_index=0):
 
 def draw_high_scores_screen(scores, background_asteroids):
     # Clear screen
-    screen.fill(BLACK)
+    game_surface.fill(BLACK)
     
     # Draw background asteroids
     for asteroid in background_asteroids:
@@ -913,21 +938,21 @@ def draw_high_scores_screen(scores, background_asteroids):
     
     # Draw title
     title_text = big_font.render("High Scores", True, WHITE)
-    screen.blit(title_text, (WIDTH // 2 - title_text.get_width() // 2, 50))
+    game_surface.blit(title_text, (WIDTH // 2 - title_text.get_width() // 2, HEIGHT // 8))
     
     # Draw scores
-    y_pos = 120
+    y_pos = HEIGHT // 4
     for i, (name, score, date) in enumerate(scores):
         score_text = font.render(f"{i+1}. {name}: {score}", True, WHITE)
         date_text = font.render(date, True, GREY)
         
-        screen.blit(score_text, (WIDTH // 2 - 150, y_pos))
-        screen.blit(date_text, (WIDTH // 2 + 100, y_pos))
+        game_surface.blit(score_text, (WIDTH // 2 - 150, y_pos))
+        game_surface.blit(date_text, (WIDTH // 2 + 100, y_pos))
         
         y_pos += 40
     
     # Draw back button
-    back_button = Button(WIDTH // 2 - 100, 500, 200, 50, "Back to Menu", font)
+    back_button = Button(WIDTH // 2 - 100, HEIGHT * 3 // 4, 200, 50, "Back to Menu", font)
     back_button.is_selected = True  # Always selected since it's the only button
     mouse_pos = pygame.mouse.get_pos()
     back_button.check_hover(mouse_pos)
@@ -937,7 +962,7 @@ def draw_high_scores_screen(scores, background_asteroids):
 
 def draw_name_input_screen(score, text_input, background_asteroids):
     # Clear screen
-    screen.fill(BLACK)
+    game_surface.fill(BLACK)
     
     # Draw background asteroids
     for asteroid in background_asteroids:
@@ -946,22 +971,22 @@ def draw_name_input_screen(score, text_input, background_asteroids):
     
     # Draw title
     title_text = big_font.render("Game Over", True, RED)
-    screen.blit(title_text, (WIDTH // 2 - title_text.get_width() // 2, 100))
+    game_surface.blit(title_text, (WIDTH // 2 - title_text.get_width() // 2, HEIGHT // 4))
     
     # Draw score
     score_text = font.render(f"Your Score: {score}", True, WHITE)
-    screen.blit(score_text, (WIDTH // 2 - score_text.get_width() // 2, 170))
+    game_surface.blit(score_text, (WIDTH // 2 - score_text.get_width() // 2, HEIGHT // 3))
     
     # Draw name input prompt
     prompt_text = font.render("Enter your name:", True, WHITE)
-    screen.blit(prompt_text, (WIDTH // 2 - prompt_text.get_width() // 2, 240))
+    game_surface.blit(prompt_text, (WIDTH // 2 - prompt_text.get_width() // 2, HEIGHT // 2 - 60))
     
     # Draw text input
     text_input.update()
     text_input.draw()
     
     # Draw submit button
-    submit_button = Button(WIDTH // 2 - 100, 380, 200, 50, "Submit Score", font)
+    submit_button = Button(WIDTH // 2 - 100, HEIGHT * 2 // 3, 200, 50, "Submit Score", font)
     submit_button.is_selected = True  # Always selected since it's the only button
     mouse_pos = pygame.mouse.get_pos()
     submit_button.check_hover(mouse_pos)
@@ -996,7 +1021,7 @@ def main():
     selected_button_index = 0  # 0 = Start Game, 1 = High Scores
     
     # Create text input for name entry
-    text_input = TextInput(WIDTH // 2 - 150, 300, 300, font)
+    text_input = TextInput(WIDTH // 2 - 150, HEIGHT // 2, 300, font)
     
     # Game timing variables
     last_shot_time = 0
@@ -1005,6 +1030,11 @@ def main():
     ufo_spawn_delay = random.randint(10000, 20000)  # 10-20 seconds
     powerup_spawn_timer = pygame.time.get_ticks()
     powerup_spawn_delay = POWERUP_SPAWN_RATE * 1000  # Convert to milliseconds
+    
+    # Print debug info
+    print(f"Screen resolution: {DISPLAY_WIDTH}x{DISPLAY_HEIGHT}")
+    print(f"Game resolution: {WIDTH}x{HEIGHT}")
+    print(f"Offset: ({OFFSET_X}, {OFFSET_Y})")
     
     # Main game loop
     running = True
@@ -1050,6 +1080,8 @@ def main():
                         else:
                             # High Scores button
                             game_state = HIGH_SCORES
+                    elif event.key == pygame.K_ESCAPE:  # Exit on ESC
+                        running = False
                 
                 if event.type == pygame.MOUSEBUTTONDOWN:
                     if start_button.is_clicked(mouse_pos, event):
@@ -1107,6 +1139,8 @@ def main():
                     if event.key == pygame.K_RETURN and text_input.text.strip():
                         save_score(db_path, text_input.text, score)
                         game_state = HIGH_SCORES
+                    elif event.key == pygame.K_ESCAPE:  # ESC to skip and go to high scores
+                        game_state = HIGH_SCORES
                 
                 if event.type == pygame.MOUSEBUTTONDOWN:
                     if submit_button.is_clicked(mouse_pos, event):
@@ -1137,13 +1171,16 @@ def main():
                                     bullets.append(result)
                                     last_shot_time = current_time
                     
-                    # Escape key to pause/return to title
+                    # Escape key to return to title
                     elif event.key == pygame.K_ESCAPE:
                         game_state = TITLE_SCREEN
                         selected_button_index = 0
         
         # Only update the game if playing
         if game_state == GAME_PLAYING:
+            # Clear the surface
+            game_surface.fill(BLACK)
+            
             # Get keys pressed
             keys = pygame.key.get_pressed()
             
@@ -1191,7 +1228,11 @@ def main():
                         # Flash screen
                         white_surface = pygame.Surface((WIDTH, HEIGHT))
                         white_surface.fill(WHITE)
-                        screen.blit(white_surface, (0, 0))
+                        game_surface.blit(white_surface, (0, 0))
+                        
+                        # Scale and display for the flash effect
+                        screen.fill(BLACK)
+                        screen.blit(game_surface, (OFFSET_X, OFFSET_Y))
                         pygame.display.flip()
                         pygame.time.delay(50)  # Flash duration
                         
@@ -1437,13 +1478,10 @@ def main():
                 powerups.append(PowerUp(x, y))
                 powerup_spawn_timer = current_time
                 powerup_spawn_delay = POWERUP_SPAWN_RATE * 1000  # Convert to milliseconds
-            
+
             # Draw everything
-            screen.fill(BLACK)
-            
-            # Draw player
             player.draw()
-            
+
             # Draw laser beam if active
             if laser_beam:
                 laser_beam.draw()
@@ -1467,14 +1505,14 @@ def main():
             # Draw particles
             for particle in particles:
                 particle.draw()
-            
+
             # Draw score
             score_text = font.render(f"Score: {score}", True, WHITE)
             level_text = font.render(f"Level: {level}", True, WHITE)
-            
+
             # Draw lives
             lives_text = font.render(f"Lives: {player.lives}", True, WHITE)
-            
+
             # Draw power-up status
             power_text = None
             if player.is_invincible:
@@ -1487,12 +1525,16 @@ def main():
             elif player.active_powerup == 'rapid_fire':
                 power_text = font.render(f"Rapid Fire: {player.rapid_fire_ammo}", True, RED)
                 
-            screen.blit(score_text, (10, 10))
-            screen.blit(level_text, (WIDTH - level_text.get_width() - 10, 10))
-            screen.blit(lives_text, (WIDTH // 2 - lives_text.get_width() // 2, 10))
-            
+            game_surface.blit(score_text, (10, 10))
+            game_surface.blit(level_text, (WIDTH - level_text.get_width() - 10, 10))
+            game_surface.blit(lives_text, (WIDTH // 2 - lives_text.get_width() // 2, 10))
+
             if power_text:
-                screen.blit(power_text, (10, HEIGHT - 40))
+                game_surface.blit(power_text, (10, HEIGHT - 40))
+
+        # Blit the game surface to the screen at the correct position (no scaling)
+        screen.fill(BLACK)
+        screen.blit(game_surface, (OFFSET_X, OFFSET_Y))
         
         # Update the display
         pygame.display.flip()
@@ -1503,3 +1545,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+                        
