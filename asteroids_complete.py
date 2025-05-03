@@ -38,6 +38,7 @@ BLUE = (0, 0, 255)
 PURPLE = (128, 0, 128)
 YELLOW = (255, 255, 0)
 GREY = (192, 192, 192)
+CYAN = (0, 255, 255)  # Color for player 2
 FPS = 60
 
 # Game states
@@ -46,6 +47,10 @@ GAME_PLAYING = 1
 GAME_OVER = 2
 HIGH_SCORES = 3
 NAME_INPUT = 4
+
+# Game modes
+SINGLE_PLAYER = 0
+COOPERATIVE = 1
 
 # Power-up spawn rate (in seconds)
 POWERUP_SPAWN_RATE = 10
@@ -72,22 +77,31 @@ def init_database():
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
     
-    # Create table if it doesn't exist
+    # Create table if it doesn't exist - add game_mode column
     cursor.execute('''
     CREATE TABLE IF NOT EXISTS high_scores (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
         score INTEGER NOT NULL,
-        date TEXT NOT NULL
+        date TEXT NOT NULL,
+        game_mode TEXT DEFAULT 'single'
     )
     ''')
+    
+    # Check if game_mode column exists, add it if it doesn't
+    cursor.execute("PRAGMA table_info(high_scores)")
+    columns = cursor.fetchall()
+    column_names = [col[1] for col in columns]
+    
+    if 'game_mode' not in column_names:
+        cursor.execute("ALTER TABLE high_scores ADD COLUMN game_mode TEXT DEFAULT 'single'")
     
     conn.commit()
     conn.close()
     
     return db_path
 
-def save_score(db_path, name, score):
+def save_score(db_path, name, score, game_mode='single'):
     """Save a score to the database"""
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
@@ -95,8 +109,8 @@ def save_score(db_path, name, score):
     # Get current date and time
     date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
-    cursor.execute("INSERT INTO high_scores (name, score, date) VALUES (?, ?, ?)",
-                  (name, score, date))
+    cursor.execute("INSERT INTO high_scores (name, score, date, game_mode) VALUES (?, ?, ?, ?)",
+                  (name, score, date, game_mode))
     
     conn.commit()
     conn.close()
@@ -106,7 +120,7 @@ def get_high_scores(db_path, limit=10):
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
     
-    cursor.execute("SELECT name, score, date FROM high_scores ORDER BY score DESC LIMIT ?", (limit,))
+    cursor.execute("SELECT name, score, date, game_mode FROM high_scores ORDER BY score DESC LIMIT ?", (limit,))
     scores = cursor.fetchall()
     
     conn.close()
@@ -320,14 +334,15 @@ class PowerUp:
         return distance < self.radius + player.radius
 
 class Bullet:
-    def __init__(self, x, y, vx, vy, is_nuke=False):
+    def __init__(self, x, y, vx, vy, is_nuke=False, player_id=0):
         self.position = [x, y]
         self.velocity = [vx, vy]
         self.radius = 2
         self.lifetime = 90  # Adjusted for larger play area
         self.is_nuke = is_nuke
-        self.color = GREY if is_nuke else WHITE
+        self.color = GREY if is_nuke else (WHITE if player_id == 0 else CYAN)
         self.prev_position = [x - vx, y - vy]  # Store previous position for continuous collision detection
+        self.player_id = player_id  # Track which player fired the bullet
         
     def draw(self):
         if self.is_nuke:
@@ -411,7 +426,7 @@ class LaserBeam:
         self.duration = 180  # 3 seconds at 60 FPS
         self.width = 5
         self.length = 3000  # Long enough to reach across the screen
-        self.color = YELLOW
+        self.color = YELLOW if player.player_id == 0 else CYAN
         
         # Calculate and store beam line segment for collision detection
         angle = math.radians(player.rotation)
@@ -421,6 +436,7 @@ class LaserBeam:
         self.dy = math.sin(angle)
         self.end_x = self.start_x + self.length * self.dx
         self.end_y = self.start_y + self.length * self.dy
+        self.player_id = player.player_id  # Track which player fired the laser
         
     def draw(self):
         angle = math.radians(self.player.rotation)
@@ -530,7 +546,7 @@ class LaserBeam:
         return False
 
 class Player:
-    def __init__(self):
+    def __init__(self, player_id=0):
         self.position = [WIDTH // 2, HEIGHT // 2]
         self.velocity = [0, 0]
         self.acceleration = 0.2
@@ -541,6 +557,14 @@ class Player:
         self.radius = 15
         self.lives = 3
         self.is_thrusting = False
+        self.player_id = player_id  # 0 = first player, 1 = second player
+        self.score = 0  # Individual score for each player
+        
+        # Different starting positions for coop mode
+        if player_id == 0:
+            self.position = [WIDTH // 3, HEIGHT // 2]
+        else:
+            self.position = [2 * WIDTH // 3, HEIGHT // 2]
         
         # Respawn invulnerability
         self.invulnerable = False
@@ -584,6 +608,9 @@ class Player:
         if self.invulnerable and not self.is_invincible and pygame.time.get_ticks() % 200 < 100:
             return
             
+        # Determine ship base color based on player ID
+        base_color = WHITE if self.player_id == 0 else CYAN
+            
         # Determine ship color based on active powerup
         if self.is_invincible:
             color = PURPLE
@@ -594,11 +621,11 @@ class Player:
             if pygame.time.get_ticks() % 800 < 400:
                 color = GREY
             else:
-                color = WHITE
+                color = base_color
         elif self.active_powerup == 'rapid_fire':
             color = RED
         else:
-            color = WHITE
+            color = base_color
         
         # Draw all after-images
         for after_image in self.after_images:
@@ -624,6 +651,7 @@ class Player:
         
         # Draw thrust flame if thrusting
         if self.is_thrusting:
+            flame_color = BLUE if self.player_id == 0 else GREEN
             flame_points = [
                 (self.position[0] - self.radius * 1.5 * cos_val, 
                  self.position[1] - self.radius * 1.5 * sin_val),
@@ -632,7 +660,7 @@ class Player:
                 (self.position[0] - self.radius * cos_val + self.radius/2 * math.cos(angle - math.pi/2), 
                  self.position[1] - self.radius * sin_val + self.radius/2 * math.sin(angle - math.pi/2))
             ]
-            pygame.draw.polygon(game_surface, BLUE, flame_points)
+            pygame.draw.polygon(game_surface, flame_color, flame_points)
         
     def rotate(self, direction):
         self.rotation += direction * self.rotation_speed
@@ -709,7 +737,7 @@ class Player:
             bullet_vx = 5 * math.cos(angle) + self.velocity[0] * 0.5  # Slower than regular bullets
             bullet_vy = 5 * math.sin(angle) + self.velocity[1] * 0.5
             self.has_nuke = False  # Use up the nuke
-            return Bullet(bullet_x, bullet_y, bullet_vx, bullet_vy, is_nuke=True)
+            return Bullet(bullet_x, bullet_y, bullet_vx, bullet_vy, is_nuke=True, player_id=self.player_id)
             
         elif self.has_laser:
             # Activate laser beam
@@ -729,7 +757,7 @@ class Player:
             if self.rapid_fire_ammo <= 0:
                 self.active_powerup = None
                 
-            return Bullet(bullet_x, bullet_y, bullet_vx, bullet_vy)
+            return Bullet(bullet_x, bullet_y, bullet_vx, bullet_vy, player_id=self.player_id)
         else:
             # Regular shot
             angle = math.radians(self.rotation)
@@ -737,7 +765,7 @@ class Player:
             bullet_y = self.position[1] + self.radius * math.sin(angle)
             bullet_vx = 10 * math.cos(angle) + self.velocity[0] * 0.5
             bullet_vy = 10 * math.sin(angle) + self.velocity[1] * 0.5
-            return Bullet(bullet_x, bullet_y, bullet_vx, bullet_vy)
+            return Bullet(bullet_x, bullet_y, bullet_vx, bullet_vy, player_id=self.player_id)
         
     def check_collision(self, asteroid):
         # Skip collision check if invulnerable
@@ -750,7 +778,12 @@ class Player:
         return distance < self.radius + asteroid.radius
         
     def respawn(self):
-        self.position = [WIDTH // 2, HEIGHT // 2]
+        # Different respawn positions for coop mode
+        if self.player_id == 0:
+            self.position = [WIDTH // 3, HEIGHT // 2]
+        else:
+            self.position = [2 * WIDTH // 3, HEIGHT // 2]
+            
         self.velocity = [0, 0]
         self.rotation = 0
         self.invulnerable = True
@@ -896,7 +929,7 @@ class UFO:
                                          self.position[1] - self.radius,
                                          self.radius, self.radius/2))
         
-    def update(self, player):
+    def update(self, players):
         # Update position
         self.position[0] += self.velocity[0]
         self.position[1] += self.velocity[1]
@@ -920,9 +953,22 @@ class UFO:
         self.shoot_timer = 0
         self.shoot_delay = random.randint(60, 120)
         
+        # Pick the closest player to target
+        if len(players) > 1 and all(player.lives > 0 for player in players):
+            # Calculate distances to each player
+            dist1 = math.sqrt((players[0].position[0] - self.position[0])**2 + 
+                             (players[0].position[1] - self.position[1])**2)
+            dist2 = math.sqrt((players[1].position[0] - self.position[0])**2 + 
+                             (players[1].position[1] - self.position[1])**2)
+            # Target the closest player
+            target = players[0] if dist1 < dist2 else players[1]
+        else:
+            # Target the first active player or the only player
+            target = next((p for p in players if p.lives > 0), players[0])
+        
         # Target the player
-        dx = player.position[0] - self.position[0]
-        dy = player.position[1] - self.position[1]
+        dx = target.position[0] - self.position[0]
+        dy = target.position[1] - self.position[1]
         angle = math.atan2(dy, dx)
         
         # Add some inaccuracy
@@ -991,32 +1037,32 @@ def draw_title_screen(background_asteroids, selected_button_index=0):
     game_surface.blit(title_text, (WIDTH // 2 - title_text.get_width() // 2, HEIGHT // 4))
     
     # Create menu buttons
-    start_button = Button(WIDTH // 2 - 100, HEIGHT // 2, 200, 50, "Start Game", font)
-    scores_button = Button(WIDTH // 2 - 100, HEIGHT // 2 + 70, 200, 50, "High Scores", font)
+    single_button = Button(WIDTH // 2 - 100, HEIGHT // 2 - 35, 200, 50, "Single Player", font)
+    coop_button = Button(WIDTH // 2 - 100, HEIGHT // 2 + 35, 200, 50, "Co-op Mode", font)
+    scores_button = Button(WIDTH // 2 - 100, HEIGHT // 2 + 105, 200, 50, "High Scores", font)
     
     # Set which button is selected based on the index
-    if selected_button_index == 0:
-        start_button.is_selected = True
-        scores_button.is_selected = False
-    else:
-        start_button.is_selected = False
-        scores_button.is_selected = True
+    single_button.is_selected = selected_button_index == 0
+    coop_button.is_selected = selected_button_index == 1
+    scores_button.is_selected = selected_button_index == 2
     
     # Check for mouse hover
     mouse_pos = pygame.mouse.get_pos()
-    start_button.check_hover(mouse_pos)
+    single_button.check_hover(mouse_pos)
+    coop_button.check_hover(mouse_pos)
     scores_button.check_hover(mouse_pos)
     
     # Draw buttons
-    start_button.draw()
+    single_button.draw()
+    coop_button.draw()
     scores_button.draw()
     
     # Draw version number in bottom left corner
-    version_text = pygame.font.Font(None, 24).render("v0.41", True, GREY)
+    version_text = pygame.font.Font(None, 24).render("v0.5", True, GREY)
     game_surface.blit(version_text, (10, HEIGHT - version_text.get_height() - 10))
     
     # Return button objects for event handling
-    return start_button, scores_button
+    return single_button, coop_button, scores_button
 
 def draw_high_scores_screen(scores, background_asteroids):
     # Clear screen
@@ -1032,8 +1078,10 @@ def draw_high_scores_screen(scores, background_asteroids):
     
     # Draw scores
     y_pos = HEIGHT // 4
-    for i, (name, score, date) in enumerate(scores):
-        score_text = font.render(f"{i+1}. {name}: {score}", True, WHITE)
+    for i, (name, score, date, game_mode) in enumerate(scores):
+        # Add (Coop) indicator for cooperative mode scores
+        mode_indicator = " (Coop)" if game_mode == 'coop' else ""
+        score_text = font.render(f"{i+1}. {name}: {score}{mode_indicator}", True, WHITE)
         date_text = font.render(date, True, GREY)
         
         game_surface.blit(score_text, (WIDTH // 2 - 150, y_pos))
@@ -1050,7 +1098,7 @@ def draw_high_scores_screen(scores, background_asteroids):
     
     return back_button
 
-def draw_name_input_screen(score, text_input, background_asteroids):
+def draw_name_input_screen(scores, text_inputs, background_asteroids, game_mode):
     # Clear screen
     game_surface.fill(BLACK)
     
@@ -1060,19 +1108,43 @@ def draw_name_input_screen(score, text_input, background_asteroids):
     
     # Draw title
     title_text = big_font.render("Game Over", True, RED)
-    game_surface.blit(title_text, (WIDTH // 2 - title_text.get_width() // 2, HEIGHT // 4))
+    game_surface.blit(title_text, (WIDTH // 2 - title_text.get_width() // 2, HEIGHT // 6))
     
-    # Draw score
-    score_text = font.render(f"Your Score: {score}", True, WHITE)
-    game_surface.blit(score_text, (WIDTH // 2 - score_text.get_width() // 2, HEIGHT // 3))
-    
-    # Draw name input prompt
-    prompt_text = font.render("Enter your name:", True, WHITE)
-    game_surface.blit(prompt_text, (WIDTH // 2 - prompt_text.get_width() // 2, HEIGHT // 2 - 60))
-    
-    # Draw text input
-    text_input.update()
-    text_input.draw()
+    # Draw scores
+    if game_mode == SINGLE_PLAYER:
+        # Single player score
+        score_text = font.render(f"Your Score: {scores[0]}", True, WHITE)
+        game_surface.blit(score_text, (WIDTH // 2 - score_text.get_width() // 2, HEIGHT // 3))
+        
+        # Draw name input prompt
+        prompt_text = font.render("Enter your name:", True, WHITE)
+        game_surface.blit(prompt_text, (WIDTH // 2 - prompt_text.get_width() // 2, HEIGHT // 2 - 60))
+        
+        # Draw text input
+        text_inputs[0].update()
+        text_inputs[0].draw()
+    else:
+        # Co-op mode, show both scores
+        p1_score_text = font.render(f"Player 1 Score: {scores[0]}", True, WHITE)
+        p2_score_text = font.render(f"Player 2 Score: {scores[1]}", True, CYAN)
+        
+        game_surface.blit(p1_score_text, (WIDTH // 2 - p1_score_text.get_width() // 2, HEIGHT // 4))
+        game_surface.blit(p2_score_text, (WIDTH // 2 - p2_score_text.get_width() // 2, HEIGHT // 3))
+        
+        # Draw name input prompts
+        p1_prompt = font.render("Player 1 name:", True, WHITE)
+        p2_prompt = font.render("Player 2 name:", True, CYAN)
+        
+        # Position the prompts and text inputs
+        game_surface.blit(p1_prompt, (WIDTH // 2 - 150, HEIGHT // 2 - 60))
+        game_surface.blit(p2_prompt, (WIDTH // 2 - 150, HEIGHT // 2))
+        
+        # Update and draw text inputs
+        text_inputs[0].update()
+        text_inputs[0].draw()
+        
+        text_inputs[1].update()
+        text_inputs[1].draw()
     
     # Draw submit button
     submit_button = Button(WIDTH // 2 - 100, HEIGHT * 2 // 3, 200, 50, "Submit Score", font)
@@ -1095,25 +1167,28 @@ def main():
         background_asteroids.append(asteroid)
     
     # Game objects
-    player = None
+    players = []  # Will contain Player objects
     asteroids = []
     bullets = []
     ufos = []
     particles = []
     powerups = []
-    laser_beam = None
+    laser_beams = []  # Now a list to support multiple laser beams
     
     # Game state and variables
     game_state = TITLE_SCREEN
-    score = 0
+    game_mode = SINGLE_PLAYER  # Default to single player
+    scores = [0, 0]  # Player scores
     level = 1
-    selected_button_index = 0  # 0 = Start Game, 1 = High Scores
+    selected_button_index = 0  # 0 = Single Player, 1 = Co-op, 2 = High Scores
     
-    # Create text input for name entry
-    text_input = TextInput(WIDTH // 2 - 150, HEIGHT // 2, 300, font)
+    # Create text inputs for name entry
+    text_input1 = TextInput(WIDTH // 2 - 150, HEIGHT // 2, 300, font)
+    text_input2 = TextInput(WIDTH // 2 - 150, HEIGHT // 2 + 60, 300, font)
+    text_inputs = [text_input1, text_input2]
     
     # Game timing variables
-    last_shot_time = 0
+    last_shot_times = [0, 0]  # One for each player
     shot_cooldown = 250  # 250 ms between shots
     ufo_spawn_timer = pygame.time.get_ticks()
     ufo_spawn_delay = random.randint(10000, 20000)  # 10-20 seconds
@@ -1144,21 +1219,26 @@ def main():
             # Handle title screen events
             if game_state == TITLE_SCREEN:
                 if event.type == pygame.KEYDOWN:
-                    if event.key == pygame.K_UP or event.key == pygame.K_DOWN:
-                        # Toggle between buttons
-                        selected_button_index = 1 - selected_button_index
+                    if event.key == pygame.K_UP:
+                        # Move selection up
+                        selected_button_index = (selected_button_index - 1) % 3
+                    elif event.key == pygame.K_DOWN:
+                        # Move selection down
+                        selected_button_index = (selected_button_index + 1) % 3
                     elif event.key == pygame.K_RETURN or event.key == pygame.K_SPACE:
                         # Activate the selected button
                         if selected_button_index == 0:
-                            # Start Game button
-                            player = Player()
+                            # Single Player button
+                            players = [Player()]
+                            game_mode = SINGLE_PLAYER
+                            
                             asteroids = []
                             bullets = []
                             ufos = []
                             particles = []
                             powerups = []
-                            laser_beam = None
-                            score = 0
+                            laser_beams = []
+                            scores = [0, 0]
                             level = 1
                             game_state = GAME_PLAYING
                             
@@ -1169,6 +1249,30 @@ def main():
                             ufo_spawn_timer = pygame.time.get_ticks()
                             ufo_spawn_delay = random.randint(10000, 20000)
                             powerup_spawn_timer = current_time
+                            
+                        elif selected_button_index == 1:
+                            # Co-op Mode button
+                            players = [Player(0), Player(1)]
+                            game_mode = COOPERATIVE
+                            
+                            asteroids = []
+                            bullets = []
+                            ufos = []
+                            particles = []
+                            powerups = []
+                            laser_beams = []
+                            scores = [0, 0]
+                            level = 1
+                            game_state = GAME_PLAYING
+                            
+                            # Create initial asteroids
+                            for _ in range(4):
+                                asteroids.append(Asteroid())
+                            
+                            ufo_spawn_timer = pygame.time.get_ticks()
+                            ufo_spawn_delay = random.randint(10000, 20000)
+                            powerup_spawn_timer = current_time
+                            
                         else:
                             # High Scores button
                             game_state = HIGH_SCORES
@@ -1176,17 +1280,43 @@ def main():
                         running = False
                 
                 if event.type == pygame.MOUSEBUTTONDOWN:
-                    start_button, scores_button = draw_title_screen(background_asteroids, selected_button_index)
-                    if start_button.is_clicked(mouse_pos, event):
-                        # Start a new game
-                        player = Player()
+                    single_button, coop_button, scores_button = draw_title_screen(background_asteroids, selected_button_index)
+                    
+                    if single_button.is_clicked(mouse_pos, event):
+                        # Start a new single player game
+                        players = [Player()]
+                        game_mode = SINGLE_PLAYER
+                        
                         asteroids = []
                         bullets = []
                         ufos = []
                         particles = []
                         powerups = []
-                        laser_beam = None
-                        score = 0
+                        laser_beams = []
+                        scores = [0, 0]
+                        level = 1
+                        game_state = GAME_PLAYING
+                        
+                        # Create initial asteroids
+                        for _ in range(4):
+                            asteroids.append(Asteroid())
+                            
+                        ufo_spawn_timer = pygame.time.get_ticks()
+                        ufo_spawn_delay = random.randint(10000, 20000)
+                        powerup_spawn_timer = current_time
+                    
+                    elif coop_button.is_clicked(mouse_pos, event):
+                        # Start a new co-op game
+                        players = [Player(0), Player(1)]
+                        game_mode = COOPERATIVE
+                        
+                        asteroids = []
+                        bullets = []
+                        ufos = []
+                        particles = []
+                        powerups = []
+                        laser_beams = []
+                        scores = [0, 0]
                         level = 1
                         game_state = GAME_PLAYING
                         
@@ -1207,57 +1337,89 @@ def main():
                 if event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_RETURN or event.key == pygame.K_SPACE or event.key == pygame.K_ESCAPE:
                         game_state = TITLE_SCREEN
-                        selected_button_index = 0  # Reset to Start Game being selected
+                        selected_button_index = 0  # Reset to Single Player being selected
                 
                 if event.type == pygame.MOUSEBUTTONDOWN:
                     high_scores = get_high_scores(db_path)
                     back_button = draw_high_scores_screen(high_scores, background_asteroids)
                     if back_button.is_clicked(mouse_pos, event):
                         game_state = TITLE_SCREEN
-                        selected_button_index = 0  # Reset to Start Game being selected
-            
+                        selected_button_index = 0  # Reset to Single Player being selected
             # Handle name input screen events
             elif game_state == NAME_INPUT:
-                # FIX 1: Modify this block to avoid double-saving
-                name_submitted = text_input.handle_event(event)
-                if name_submitted and name_submitted.strip():  # Enter key was pressed with valid name
-                    save_score(db_path, name_submitted, score)
-                    game_state = HIGH_SCORES
-                    continue  # Skip the next blocks to avoid double-saving
+                # Check for text input events for both inputs
+                for i, text_input in enumerate(text_inputs):
+                    if i < (2 if game_mode == COOPERATIVE else 1):  # Only check relevant inputs
+                        name_submitted = text_input.handle_event(event)
+                        if name_submitted and name_submitted.strip():
+                            # Just store the name, we'll save all scores when submit button is clicked
+                            pass
                 
                 if event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_ESCAPE:  # ESC to skip and go to high scores
                         game_state = HIGH_SCORES
                 
                 if event.type == pygame.MOUSEBUTTONDOWN:
-                    submit_button = draw_name_input_screen(score, text_input, background_asteroids)
+                    submit_button = draw_name_input_screen(scores, text_inputs, background_asteroids, game_mode)
                     if submit_button.is_clicked(mouse_pos, event):
-                        if text_input.text.strip():  # Name is not empty
-                            save_score(db_path, text_input.text, score)
-                            game_state = HIGH_SCORES
+                        # Check that names are provided
+                        if game_mode == SINGLE_PLAYER:
+                            if text_inputs[0].text.strip():
+                                save_score(db_path, text_inputs[0].text, scores[0], 'single')
+                                game_state = HIGH_SCORES
+                        else:  # COOPERATIVE
+                            if text_inputs[0].text.strip() and text_inputs[1].text.strip():
+                                # Save both scores with coop mode indicator
+                                save_score(db_path, text_inputs[0].text, scores[0], 'coop')
+                                save_score(db_path, text_inputs[1].text, scores[1], 'coop')
+                                game_state = HIGH_SCORES
             
             # Handle gameplay events
             elif game_state == GAME_PLAYING:
                 if event.type == pygame.KEYDOWN:
+                    # Player 1 shooting
                     if event.key == pygame.K_SPACE:
-                        # Only handle shooting if laser beam isn't active
-                        if not laser_beam:
-                            # If rapid fire is active, don't apply cooldown
-                            if player.active_powerup == 'rapid_fire' and player.rapid_fire_ammo > 0:
-                                result = player.shoot()
-                                if isinstance(result, Bullet):
-                                    bullets.append(result)
+                        if len(players) > 0 and players[0].lives > 0:
+                            # Only handle shooting if no laser beam is active for this player
+                            if not any(beam.player_id == 0 for beam in laser_beams):
+                                # If rapid fire is active, don't apply cooldown
+                                if players[0].active_powerup == 'rapid_fire' and players[0].rapid_fire_ammo > 0:
+                                    result = players[0].shoot()
+                                    if isinstance(result, Bullet):
+                                        bullets.append(result)
+                                        
+                                # Handle shooting with cooldown for other weapons
+                                elif current_time - last_shot_times[0] > shot_cooldown:
+                                    result = players[0].shoot()
                                     
-                            # Handle shooting with cooldown for other weapons
-                            elif current_time - last_shot_time > shot_cooldown:
-                                result = player.shoot()
-                                
-                                # Handle different return types
-                                if result == "laser":
-                                    laser_beam = LaserBeam(player)
-                                elif isinstance(result, Bullet):
-                                    bullets.append(result)
-                                    last_shot_time = current_time
+                                    # Handle different return types
+                                    if result == "laser":
+                                        laser_beams.append(LaserBeam(players[0]))
+                                    elif isinstance(result, Bullet):
+                                        bullets.append(result)
+                                        last_shot_times[0] = current_time
+                    
+                    # Player 2 shooting (numpad 0)
+                    elif event.key == pygame.K_KP0:
+                        if game_mode == COOPERATIVE and len(players) > 1 and players[1].lives > 0:
+                            # Only handle shooting if no laser beam is active for this player
+                            if not any(beam.player_id == 1 for beam in laser_beams):
+                                # If rapid fire is active, don't apply cooldown
+                                if players[1].active_powerup == 'rapid_fire' and players[1].rapid_fire_ammo > 0:
+                                    result = players[1].shoot()
+                                    if isinstance(result, Bullet):
+                                        bullets.append(result)
+                                        
+                                # Handle shooting with cooldown for other weapons
+                                elif current_time - last_shot_times[1] > shot_cooldown:
+                                    result = players[1].shoot()
+                                    
+                                    # Handle different return types
+                                    if result == "laser":
+                                        laser_beams.append(LaserBeam(players[1]))
+                                    elif isinstance(result, Bullet):
+                                        bullets.append(result)
+                                        last_shot_times[1] = current_time
                     
                     # Escape key to return to title
                     elif event.key == pygame.K_ESCAPE:
@@ -1266,12 +1428,12 @@ def main():
         
         # Draw appropriate screen based on game state
         if game_state == TITLE_SCREEN:
-            start_button, scores_button = draw_title_screen(background_asteroids, selected_button_index)
+            single_button, coop_button, scores_button = draw_title_screen(background_asteroids, selected_button_index)
         elif game_state == HIGH_SCORES:
             high_scores = get_high_scores(db_path)
             back_button = draw_high_scores_screen(high_scores, background_asteroids)
         elif game_state == NAME_INPUT:
-            submit_button = draw_name_input_screen(score, text_input, background_asteroids)
+            submit_button = draw_name_input_screen(scores, text_inputs, background_asteroids, game_mode)
         
         # Only update the game if playing
         elif game_state == GAME_PLAYING:
@@ -1281,24 +1443,44 @@ def main():
             # Get keys pressed
             keys = pygame.key.get_pressed()
             
-            # Player controls
-            if keys[pygame.K_LEFT] or keys[pygame.K_a]:
-                player.rotate(-1)
-            if keys[pygame.K_RIGHT] or keys[pygame.K_d]:
-                player.rotate(1)
-            if keys[pygame.K_UP] or keys[pygame.K_w]:
-                player.thrust()
+            # Player 1 controls
+            if players[0].lives > 0:
+                if keys[pygame.K_LEFT] or keys[pygame.K_a]:
+                    players[0].rotate(-1)
+                if keys[pygame.K_RIGHT] or keys[pygame.K_d]:
+                    players[0].rotate(1)
+                if keys[pygame.K_UP] or keys[pygame.K_w]:
+                    players[0].thrust()
+                    
+                # Rapid fire shooting for player 1
+                if players[0].active_powerup == 'rapid_fire' and keys[pygame.K_SPACE] and players[0].rapid_fire_ammo > 0:
+                    if current_time - last_shot_times[0] > 100:  # Faster firing rate
+                        result = players[0].shoot()
+                        if isinstance(result, Bullet):
+                            bullets.append(result)
+                            last_shot_times[0] = current_time
+            
+            # Player 2 controls (numpad) - only in co-op mode
+            if game_mode == COOPERATIVE and len(players) > 1 and players[1].lives > 0:
+                if keys[pygame.K_KP4]:  # Left
+                    players[1].rotate(-1)
+                if keys[pygame.K_KP6]:  # Right
+                    players[1].rotate(1)
+                if keys[pygame.K_KP8]:  # Up/Thrust
+                    players[1].thrust()
+                    
+                # Rapid fire shooting for player 2
+                if players[1].active_powerup == 'rapid_fire' and keys[pygame.K_KP0] and players[1].rapid_fire_ammo > 0:
+                    if current_time - last_shot_times[1] > 100:  # Faster firing rate
+                        result = players[1].shoot()
+                        if isinstance(result, Bullet):
+                            bullets.append(result)
+                            last_shot_times[1] = current_time
                 
-            # Rapid fire shooting
-            if player.active_powerup == 'rapid_fire' and keys[pygame.K_SPACE] and player.rapid_fire_ammo > 0:
-                if current_time - last_shot_time > 100:  # Faster firing rate
-                    result = player.shoot()
-                    if isinstance(result, Bullet):
-                        bullets.append(result)
-                        last_shot_time = current_time
-                
-            # Update player
-            player.update()
+            # Update players
+            for player in players:
+                if player.lives > 0:
+                    player.update()
             
             # Update bullets
             for bullet in bullets[:]:
@@ -1341,14 +1523,23 @@ def main():
                                 random.choice([RED, YELLOW, WHITE])
                             ))
                         
+                        # Credit points to the player who fired the bullet
+                        player_id = bullet.player_id
+                        
                         # Destroy all asteroids and UFOs on screen
                         for asteroid in asteroids[:]:
-                            score += (4 - asteroid.size) * 100
+                            # Add score to the appropriate player
+                            players[player_id].score += (4 - asteroid.size) * 100
+                            scores[player_id] += (4 - asteroid.size) * 100
+                            
                             particles.extend(create_explosion(asteroid.position[0], asteroid.position[1], asteroid.size))
                         asteroids.clear()
                         
                         for ufo in ufos[:]:
-                            score += 1000
+                            # Add score to the appropriate player
+                            players[player_id].score += 1000
+                            scores[player_id] += 1000
+                            
                             particles.extend(create_explosion(ufo.position[0], ufo.position[1], 2))
                         ufos.clear()
                         
@@ -1364,16 +1555,22 @@ def main():
                 if bullet.is_dead():
                     bullets.remove(bullet)
             
-            # Update laser beam
-            if laser_beam:
+            # Update laser beams
+            for laser_beam in laser_beams[:]:
+                player_id = laser_beam.player_id
+                
                 # Check for asteroid destruction by laser
                 for asteroid in asteroids[:]:
                     if laser_beam.check_collision(asteroid):
-                        # Add score based on asteroid size
-                        score += (4 - asteroid.size) * 100
+                        # Add score to the appropriate player
+                        players[player_id].score += (4 - asteroid.size) * 100
+                        scores[player_id] += (4 - asteroid.size) * 100
                         
                         # Create an explosion effect
-                        particles.extend(create_explosion(asteroid.position[0], asteroid.position[1], asteroid.size, YELLOW))
+                        particles.extend(create_explosion(
+                            asteroid.position[0], asteroid.position[1], asteroid.size,
+                            YELLOW if player_id == 0 else CYAN
+                        ))
                         
                         # Break the asteroid
                         fragments = asteroid.break_apart()
@@ -1385,23 +1582,34 @@ def main():
                 # Check for UFO destruction by laser
                 for ufo in ufos[:]:
                     if laser_beam.check_collision(ufo):
-                        # Add score
-                        score += 1000
+                        # Add score to the appropriate player
+                        players[player_id].score += 1000
+                        scores[player_id] += 1000
                         
                         # Create an explosion effect
-                        particles.extend(create_explosion(ufo.position[0], ufo.position[1], 2, YELLOW))
+                        particles.extend(create_explosion(
+                            ufo.position[0], ufo.position[1], 2,
+                            YELLOW if player_id == 0 else CYAN
+                        ))
                         
                         # Remove the UFO
                         ufos.remove(ufo)
                 
                 # Update laser beam
                 if laser_beam.update():
-                    laser_beam = None
+                    laser_beams.remove(laser_beam)
                     
             # Update powerups
             for powerup in powerups[:]:
-                if powerup.update() or powerup.check_collision(player):
-                    if powerup.check_collision(player):
+                powerup_collected = False
+                
+                if powerup.update():
+                    powerups.remove(powerup)
+                    continue
+                    
+                # Check if any player collected the powerup
+                for player in players:
+                    if player.lives > 0 and powerup.check_collision(player):
                         # Player collected the powerup
                         player.collect_powerup(powerup.type)
                         # Create particle effect
@@ -1409,50 +1617,71 @@ def main():
                             powerup.x, powerup.y, 2, 
                             PowerUp.COLORS[powerup.type]
                         ))
+                        powerup_collected = True
+                        break
+                        
+                if powerup_collected:
                     powerups.remove(powerup)
                     
             # Update asteroids
             for asteroid in asteroids[:]:
                 asteroid.update()
                 
-                # Check collision with player
-                if player.check_collision(asteroid):
-                    player.lives -= 1
-                    particles.extend(create_explosion(player.position[0], player.position[1], 2))
-                    
+                # Check collision with players
+                for p_idx, player in enumerate(players):
                     if player.lives <= 0:
-                        game_state = NAME_INPUT
-                        text_input.text = ""
-                        text_input.active = True
-                    else:
-                        player.respawn()
+                        continue
                         
-                    # Create an explosion effect
-                    particles.extend(create_explosion(asteroid.position[0], asteroid.position[1], asteroid.size))
+                    if player.check_collision(asteroid):
+                        player.lives -= 1
+                        particles.extend(create_explosion(player.position[0], player.position[1], 2))
                         
-                    # Remove the asteroid
-                    asteroids.remove(asteroid)
-                    continue
-                
-                # Check if invincible player rammed into asteroid
-                elif player.is_invincible:
-                    # Calculate distance
-                    distance = math.sqrt((player.position[0] - asteroid.position[0])**2 + 
-                                        (player.position[1] - asteroid.position[1])**2)
-                    if distance < player.radius + asteroid.radius:
-                        # Add score based on asteroid size
-                        score += (4 - asteroid.size) * 100
-                        
+                        # Check for game over
+                        if game_mode == SINGLE_PLAYER or all(p.lives <= 0 for p in players):
+                            game_state = NAME_INPUT
+                            text_inputs[0].text = ""
+                            text_inputs[0].active = True
+                            if game_mode == COOPERATIVE:
+                                text_inputs[1].text = ""
+                                text_inputs[1].active = False  # Start with player 1 active
+                        else:
+                            player.respawn()
+                            
                         # Create an explosion effect
-                        particles.extend(create_explosion(asteroid.position[0], asteroid.position[1], asteroid.size, PURPLE))
-                        
-                        # Break the asteroid
-                        fragments = asteroid.break_apart()
-                        asteroids.extend(fragments)
-                        
+                        particles.extend(create_explosion(asteroid.position[0], asteroid.position[1], asteroid.size))
+                            
                         # Remove the asteroid
                         asteroids.remove(asteroid)
-                        continue
+                        break
+                
+                    # Check if invincible player rammed into asteroid
+                    elif player.is_invincible:
+                        # Calculate distance
+                        distance = math.sqrt((player.position[0] - asteroid.position[0])**2 + 
+                                            (player.position[1] - asteroid.position[1])**2)
+                        if distance < player.radius + asteroid.radius:
+                            # Add score to the player
+                            player.score += (4 - asteroid.size) * 100
+                            scores[p_idx] += (4 - asteroid.size) * 100
+                            
+                            # Create an explosion effect with player color
+                            color = PURPLE  # Base invincibility color
+                            if p_idx == 1:  # Blend with player 2 color for more distinct effect
+                                color = (128, 0, 255)  # Blend of purple and cyan
+                                
+                            particles.extend(create_explosion(asteroid.position[0], asteroid.position[1], asteroid.size, color))
+                            
+                            # Break the asteroid
+                            fragments = asteroid.break_apart()
+                            asteroids.extend(fragments)
+                            
+                            # Remove the asteroid
+                            asteroids.remove(asteroid)
+                            break
+                
+                # Skip further checks if asteroid was removed
+                if asteroid not in asteroids:
+                    continue
                     
                 # FIX 3: Check bullet collisions with enhanced collision detection 
                 for bullet in bullets[:]:
@@ -1464,8 +1693,12 @@ def main():
                         collides = bullet.check_collision(asteroid)
                         
                     if collides:
-                        # Add score based on asteroid size
-                        score += (4 - asteroid.size) * 100
+                        # Get player who fired the bullet
+                        player_id = bullet.player_id
+                        
+                        # Add score to the appropriate player
+                        players[player_id].score += (4 - asteroid.size) * 100
+                        scores[player_id] += (4 - asteroid.size) * 100
                         
                         # Create an explosion effect
                         particles.extend(create_explosion(asteroid.position[0], asteroid.position[1], asteroid.size))
@@ -1482,49 +1715,70 @@ def main():
             
             # Update UFOs
             for ufo in ufos[:]:
-                ufo_bullet = ufo.update(player)
+                ufo_bullet = ufo.update(players)  # Pass all players for UFO targeting
                 
                 # Check if the UFO is off-screen
                 if ufo.is_off_screen():
                     ufos.remove(ufo)
                     continue
                     
-                # Check collision with player
-                if ufo.check_collision(player) and not player.is_invincible:
-                    player.lives -= 1
-                    particles.extend(create_explosion(player.position[0], player.position[1], 2))
-                    particles.extend(create_explosion(ufo.position[0], ufo.position[1], 2))
-                    
+                # Check collision with players
+                for p_idx, player in enumerate(players):
                     if player.lives <= 0:
-                        game_state = NAME_INPUT
-                        text_input.text = ""
-                        text_input.active = True
-                    else:
-                        player.respawn()
-                        
-                    ufos.remove(ufo)
-                    continue
-                
-                # Check if invincible player rammed into UFO
-                elif player.is_invincible:
-                    distance = math.sqrt((player.position[0] - ufo.position[0])**2 + 
-                                        (player.position[1] - ufo.position[1])**2)
-                    if distance < player.radius + ufo.radius:
-                        # Add score
-                        score += 1000
-                        
-                        # Create an explosion effect
-                        particles.extend(create_explosion(ufo.position[0], ufo.position[1], 2, PURPLE))
-                        
-                        # Remove the UFO
-                        ufos.remove(ufo)
                         continue
+                        
+                    if ufo.check_collision(player) and not player.is_invincible:
+                        player.lives -= 1
+                        particles.extend(create_explosion(player.position[0], player.position[1], 2))
+                        particles.extend(create_explosion(ufo.position[0], ufo.position[1], 2))
+                        
+                        # Check for game over
+                        if game_mode == SINGLE_PLAYER or all(p.lives <= 0 for p in players):
+                            game_state = NAME_INPUT
+                            text_inputs[0].text = ""
+                            text_inputs[0].active = True
+                            if game_mode == COOPERATIVE:
+                                text_inputs[1].text = ""
+                                text_inputs[1].active = False  # Start with player 1 active
+                        else:
+                            player.respawn()
+                        
+                        ufos.remove(ufo)
+                        break
+                    
+                    # Check if invincible player rammed into UFO
+                    elif player.is_invincible:
+                        distance = math.sqrt((player.position[0] - ufo.position[0])**2 + 
+                                            (player.position[1] - ufo.position[1])**2)
+                        if distance < player.radius + ufo.radius:
+                            # Add score to the player
+                            player.score += 1000
+                            scores[p_idx] += 1000
+                            
+                            # Create an explosion effect
+                            color = PURPLE
+                            if p_idx == 1:  # Player 2
+                                color = (128, 0, 255)  # Blend of purple and cyan
+                                
+                            particles.extend(create_explosion(ufo.position[0], ufo.position[1], 2, color))
+                            
+                            # Remove the UFO
+                            ufos.remove(ufo)
+                            break
+                
+                # Skip if UFO was removed
+                if ufo not in ufos:
+                    continue
                     
                 # Check bullet collisions
                 for bullet in bullets[:]:
                     if ufo.check_collision(bullet):
-                        # Add score
-                        score += 1000
+                        # Get player who fired the bullet
+                        player_id = bullet.player_id
+                        
+                        # Add score to the appropriate player
+                        players[player_id].score += 1000
+                        scores[player_id] += 1000
                         
                         # Create an explosion effect
                         particles.extend(create_explosion(ufo.position[0], ufo.position[1], 2))
@@ -1549,15 +1803,30 @@ def main():
             if len(asteroids) == 0:
                 level += 1
                 
+                # In co-op mode, if a player was dead but at least one player survived
+                if game_mode == COOPERATIVE:
+                    for player in players:
+                        if player.lives <= 0:
+                            # Revive them with 1 life at the start of the new level
+                            player.lives = 1
+                            player.respawn()
+                
                 # Spawn more asteroids each level
                 for _ in range(4 + level):
                     # Make sure asteroids don't spawn directly on the player
                     while True:
                         asteroid = Asteroid()
-                        dx = asteroid.position[0] - player.position[0]
-                        dy = asteroid.position[1] - player.position[1]
-                        dist = math.sqrt(dx*dx + dy*dy)
-                        if dist > 100:  # Safe distance
+                        # Check distance to all active players
+                        safe = True
+                        for player in players:
+                            if player.lives > 0:
+                                dx = asteroid.position[0] - player.position[0]
+                                dy = asteroid.position[1] - player.position[1]
+                                dist = math.sqrt(dx*dx + dy*dy)
+                                if dist < 100:  # Safe distance
+                                    safe = False
+                                    break
+                        if safe:
                             break
                     asteroids.append(asteroid)
             
@@ -1569,14 +1838,22 @@ def main():
                 
             # Spawn power-up if it's time
             if current_time - powerup_spawn_timer > powerup_spawn_delay and len(powerups) < 2:
-                # Choose a location away from the player
+                # Choose a location away from all players
                 while True:
                     x = random.randint(50, WIDTH - 50)
                     y = random.randint(50, HEIGHT - 50)
-                    dx = x - player.position[0]
-                    dy = y - player.position[1]
-                    dist = math.sqrt(dx*dx + dy*dy)
-                    if dist > 100:  # Safe distance
+                    
+                    # Check distance to all active players
+                    safe = True
+                    for player in players:
+                        if player.lives > 0:
+                            dx = x - player.position[0]
+                            dy = y - player.position[1]
+                            dist = math.sqrt(dx*dx + dy*dy)
+                            if dist < 100:  # Safe distance
+                                safe = False
+                                break
+                    if safe:
                         break
                         
                 powerups.append(PowerUp(x, y))
@@ -1584,10 +1861,12 @@ def main():
                 powerup_spawn_delay = POWERUP_SPAWN_RATE * 1000  # Convert to milliseconds
 
             # Draw everything
-            player.draw()
+            for player in players:
+                if player.lives > 0:
+                    player.draw()
 
-            # Draw laser beam if active
-            if laser_beam:
+            # Draw laser beams if active
+            for laser_beam in laser_beams:
                 laser_beam.draw()
                 
             # Draw bullets
@@ -1610,31 +1889,95 @@ def main():
             for particle in particles:
                 particle.draw()
 
-            # Draw score
-            score_text = font.render(f"Score: {score}", True, WHITE)
-            level_text = font.render(f"Level: {level}", True, WHITE)
-
-            # Draw lives
-            lives_text = font.render(f"Lives: {player.lives}", True, WHITE)
-
-            # Draw power-up status
-            power_text = None
-            if player.is_invincible:
-                remaining = 10 - (current_time - player.invincible_timer) // 1000
-                power_text = font.render(f"Invincibility: {max(0, remaining)}s", True, PURPLE)
-            elif player.has_laser:
-                power_text = font.render("Laser Ready!", True, YELLOW)
-            elif player.has_nuke:
-                power_text = font.render("Nuclear Bomb Ready!", True, GREY)
-            elif player.active_powerup == 'rapid_fire':
-                power_text = font.render(f"Rapid Fire: {player.rapid_fire_ammo}", True, RED)
+            # Draw UI based on game mode
+            if game_mode == SINGLE_PLAYER:
+                # Draw score centered at top
+                score_text = font.render(f"Score: {scores[0]}", True, WHITE)
+                level_text = font.render(f"Level: {level}", True, WHITE)
+                lives_text = font.render(f"Lives: {players[0].lives}", True, WHITE)
                 
-            game_surface.blit(score_text, (10, 10))
-            game_surface.blit(level_text, (WIDTH - level_text.get_width() - 10, 10))
-            game_surface.blit(lives_text, (WIDTH // 2 - lives_text.get_width() // 2, 10))
-
-            if power_text:
-                game_surface.blit(power_text, (10, HEIGHT - 40))
+                # Position UI elements
+                game_surface.blit(score_text, (10, 10))
+                game_surface.blit(level_text, (WIDTH - level_text.get_width() - 10, 10))
+                game_surface.blit(lives_text, (WIDTH // 2 - lives_text.get_width() // 2, 10))
+                
+                # Draw power-up status
+                if players[0].is_invincible:
+                    remaining = 10 - (current_time - players[0].invincible_timer) // 1000
+                    power_text = font.render(f"Invincibility: {max(0, remaining)}s", True, PURPLE)
+                    game_surface.blit(power_text, (10, HEIGHT - 40))
+                elif players[0].has_laser:
+                    power_text = font.render("Laser Ready!", True, YELLOW)
+                    game_surface.blit(power_text, (10, HEIGHT - 40))
+                elif players[0].has_nuke:
+                    power_text = font.render("Nuclear Bomb Ready!", True, GREY)
+                    game_surface.blit(power_text, (10, HEIGHT - 40))
+                elif players[0].active_powerup == 'rapid_fire':
+                    power_text = font.render(f"Rapid Fire: {players[0].rapid_fire_ammo}", True, RED)
+                    game_surface.blit(power_text, (10, HEIGHT - 40))
+            else:
+                # Co-op mode UI - Player 1 on left, Player 2 on right
+                
+                # Player 1 UI (left side)
+                p1_score_text = font.render(f"P1: {scores[0]}", True, WHITE)
+                p1_lives_text = font.render(f"Lives: {players[0].lives}", True, WHITE)
+                
+                # Player 2 UI (right side)
+                p2_score_text = font.render(f"P2: {scores[1]}", True, CYAN)
+                p2_lives_text = font.render(f"Lives: {players[1].lives}", True, CYAN)
+                
+                # Level (center)
+                level_text = font.render(f"Level: {level}", True, WHITE)
+                
+                # Position UI elements
+                game_surface.blit(p1_score_text, (10, 10))
+                game_surface.blit(p1_lives_text, (10, 40))
+                
+                game_surface.blit(level_text, (WIDTH // 2 - level_text.get_width() // 2, 10))
+                
+                game_surface.blit(p2_score_text, (WIDTH - p2_score_text.get_width() - 10, 10))
+                game_surface.blit(p2_lives_text, (WIDTH - p2_lives_text.get_width() - 10, 40))
+                
+                # Draw power-up statuses at bottom
+                # Player 1 (left side)
+                y_pos = HEIGHT - 40
+                if players[0].is_invincible:
+                    remaining = 10 - (current_time - players[0].invincible_timer) // 1000
+                    p1_power_text = font.render(f"P1 Invincibility: {max(0, remaining)}s", True, PURPLE)
+                    game_surface.blit(p1_power_text, (10, y_pos))
+                    y_pos -= 30
+                elif players[0].has_laser:
+                    p1_power_text = font.render("P1 Laser Ready", True, YELLOW)
+                    game_surface.blit(p1_power_text, (10, y_pos))
+                    y_pos -= 30
+                elif players[0].has_nuke:
+                    p1_power_text = font.render("P1 Nuke Ready", True, GREY)
+                    game_surface.blit(p1_power_text, (10, y_pos))
+                    y_pos -= 30
+                elif players[0].active_powerup == 'rapid_fire':
+                    p1_power_text = font.render(f"P1 Rapid Fire: {players[0].rapid_fire_ammo}", True, RED)
+                    game_surface.blit(p1_power_text, (10, y_pos))
+                    y_pos -= 30
+                
+                # Player 2 (right side)
+                y_pos = HEIGHT - 40
+                if players[1].is_invincible:
+                    remaining = 10 - (current_time - players[1].invincible_timer) // 1000
+                    p2_power_text = font.render(f"P2 Invincibility: {max(0, remaining)}s", True, PURPLE)
+                    game_surface.blit(p2_power_text, (WIDTH - p2_power_text.get_width() - 10, y_pos))
+                    y_pos -= 30
+                elif players[1].has_laser:
+                    p2_power_text = font.render("P2 Laser Ready", True, CYAN)
+                    game_surface.blit(p2_power_text, (WIDTH - p2_power_text.get_width() - 10, y_pos))
+                    y_pos -= 30
+                elif players[1].has_nuke:
+                    p2_power_text = font.render("P2 Nuke Ready", True, GREY)
+                    game_surface.blit(p2_power_text, (WIDTH - p2_power_text.get_width() - 10, y_pos))
+                    y_pos -= 30
+                elif players[1].active_powerup == 'rapid_fire':
+                    p2_power_text = font.render(f"P2 Rapid Fire: {players[1].rapid_fire_ammo}", True, RED)
+                    game_surface.blit(p2_power_text, (WIDTH - p2_power_text.get_width() - 10, y_pos))
+                    y_pos -= 30
 
         # Blit the game surface to the screen at the correct position (no scaling)
         screen.fill(BLACK)
