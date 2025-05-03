@@ -10,6 +10,37 @@ from pygame import joystick
 # Initialize pygame
 pygame.init()
 
+# Initialize sound mixer
+pygame.mixer.pre_init(44100, -16, 2, 512)  # Setup for low sound latency
+pygame.mixer.init()
+
+# Load sound effects
+sounds = {
+    'shoot': pygame.mixer.Sound('sounds/shoot.wav'),
+    'explosion_large': pygame.mixer.Sound('sounds/explosion_large.wav'),
+    'explosion_medium': pygame.mixer.Sound('sounds/explosion_medium.wav'),
+    'explosion_small': pygame.mixer.Sound('sounds/explosion_small.wav'),
+    'player_explosion': pygame.mixer.Sound('sounds/player_explosion.wav'),
+    'ufo': pygame.mixer.Sound('sounds/ufo.wav'),
+    'ufo_shoot': pygame.mixer.Sound('sounds/ufo_shoot.wav'),
+    'powerup': pygame.mixer.Sound('sounds/powerup.wav'),
+    'laser': pygame.mixer.Sound('sounds/laser.wav'),
+    'nuke': pygame.mixer.Sound('sounds/nuke.wav'),
+    'thrust': pygame.mixer.Sound('sounds/thrust.wav'),
+    'menu_select': pygame.mixer.Sound('sounds/menu_select.wav'),
+    'menu_change': pygame.mixer.Sound('sounds/menu_change.wav'),
+}
+
+# Set volume levels for different sound categories
+for sound in ['shoot', 'ufo_shoot', 'laser', 'thrust']:
+    sounds[sound].set_volume(0.4)  # Slightly lower volume for frequent sounds
+
+for sound in ['explosion_large', 'explosion_medium', 'explosion_small', 'player_explosion', 'powerup', 'nuke']:
+    sounds[sound].set_volume(0.6)  # Medium volume for effects
+
+for sound in ['menu_select', 'menu_change']:
+    sounds[sound].set_volume(0.5)  # Menu sounds
+
 # Get the actual display resolution
 info = pygame.display.Info()
 DISPLAY_WIDTH, DISPLAY_HEIGHT = info.current_w, info.current_h
@@ -446,7 +477,7 @@ class LaserBeam:
     def __init__(self, player):
         self.player = player
         self.duration = 180  # 3 seconds at 60 FPS
-        self.width = 5
+        self.width = 10
         self.length = 3000  # Long enough to reach across the screen
         self.color = YELLOW if player.player_id == 0 else CYAN
         
@@ -1588,7 +1619,7 @@ def main():
                                     result = players[0].shoot()
                                     if isinstance(result, Bullet):
                                         bullets.append(result)
-                                        
+                                        sounds['shoot'].play()
                                 # Handle shooting with cooldown for other weapons
                                 elif current_time - last_shot_times[0] > shot_cooldown:
                                     result = players[0].shoot()
@@ -1599,7 +1630,8 @@ def main():
                                     elif isinstance(result, Bullet):
                                         bullets.append(result)
                                         last_shot_times[0] = current_time
-                    
+                                        sounds['shoot'].play()  # Add this line
+					                    
                     # Player 2 shooting (numpad 0)
                     elif event.key == pygame.K_KP0:
                         if game_mode == COOPERATIVE and len(players) > 1 and players[1].lives > 0:
