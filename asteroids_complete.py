@@ -5,6 +5,7 @@ import random
 import sqlite3
 import os
 from datetime import datetime
+from pygame import joystick
 
 # Initialize pygame
 pygame.init()
@@ -59,6 +60,10 @@ POWERUP_SPAWN_RATE = 10
 AFTERIMAGE_FREQUENCY = 5  # Frames between each after-image (lower = more images)
 AFTERIMAGE_DURATION = 30  # How long after-images last in frames
 
+# Controller settings
+CONTROLLER_DEADZONE = 0.2  # Analog stick deadzone
+CONTROLLER_REPEAT_DELAY = 200  # Milliseconds
+
 # Set up the display
 screen = pygame.display.set_mode((DISPLAY_WIDTH, DISPLAY_HEIGHT), pygame.FULLSCREEN)
 game_surface = pygame.Surface((WIDTH, HEIGHT))
@@ -69,6 +74,23 @@ clock = pygame.time.Clock()
 font = pygame.font.Font(None, 36)
 title_font = pygame.font.Font(None, 72)
 big_font = pygame.font.Font(None, 48)
+
+def init_controllers():
+    """Initialize all connected controllers"""
+    joystick.init()
+    controllers = []
+    
+    # Get count of joysticks
+    joystick_count = joystick.get_count()
+    
+    # Initialize all connected joysticks
+    for i in range(joystick_count):
+        controller = joystick.Joystick(i)
+        controller.init()
+        controllers.append(controller)
+        print(f"Controller {i} initialized: {controller.get_name()}")
+        
+    return controllers
 
 # Database setup
 def init_database():
@@ -1058,8 +1080,13 @@ def draw_title_screen(background_asteroids, selected_button_index=0):
     scores_button.draw()
     
     # Draw version number in bottom left corner
-    version_text = pygame.font.Font(None, 24).render("v0.5", True, GREY)
+    version_text = pygame.font.Font(None, 24).render("v0.61", True, GREY)
     game_surface.blit(version_text, (10, HEIGHT - version_text.get_height() - 10))
+    
+    # Draw controller instructions if controllers are available
+    if joystick.get_count() > 0:
+        controls_text = pygame.font.Font(None, 24).render("Controller Ready", True, GREEN)
+        game_surface.blit(controls_text, (WIDTH - controls_text.get_width() - 10, HEIGHT - controls_text.get_height() - 10))
     
     # Return button objects for event handling
     return single_button, coop_button, scores_button
@@ -1153,6 +1180,11 @@ def draw_name_input_screen(scores, text_inputs, background_asteroids, game_mode)
     submit_button.check_hover(mouse_pos)
     submit_button.draw()
     
+    # Draw controller info
+    if joystick.get_count() > 0:
+        controls_text = pygame.font.Font(None, 24).render("Press START to submit", True, GREEN)
+        game_surface.blit(controls_text, (WIDTH - controls_text.get_width() - 10, HEIGHT - controls_text.get_height() - 10))
+    
     return submit_button
 
 def main():
@@ -1165,6 +1197,13 @@ def main():
         asteroid = Asteroid()
         asteroid.velocity = [asteroid.velocity[0] * 0.3, asteroid.velocity[1] * 0.3]  # Slower movement
         background_asteroids.append(asteroid)
+    
+    # Initialize controllers
+    controllers = init_controllers()
+    
+    # Controller button press tracking
+    controller_button_states = [{} for _ in range(max(1, len(controllers)))]
+    controller_button_times = [{} for _ in range(max(1, len(controllers)))]
     
     # Game objects
     players = []  # Will contain Player objects
@@ -1215,9 +1254,107 @@ def main():
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
+            
+            # Handle controller connections/disconnections
+            if event.type == pygame.JOYDEVICEADDED:
+                print("Controller connected!")
+                controllers = init_controllers()
+                controller_button_states = [{} for _ in range(max(1, len(controllers)))]
+                controller_button_times = [{} for _ in range(max(1, len(controllers)))]
+
+            if event.type == pygame.JOYDEVICEREMOVED:
+                print("Controller disconnected!")
+                controllers = init_controllers()
+                controller_button_states = [{} for _ in range(max(1, len(controllers)))]
+                controller_button_times = [{} for _ in range(max(1, len(controllers)))]
                 
             # Handle title screen events
             if game_state == TITLE_SCREEN:
+                # Check controller input for menu navigation
+                for i, controller in enumerate(controllers):
+                    # Only check once per frame
+                    if i == 0:  # Use first controller for menu navigation
+                        # D-pad or analog stick for menu navigation
+                        v_axis = controller.get_axis(1)  # Left stick vertical
+                        
+                        # Use a timer to avoid rapid scrolling
+                        current_time = pygame.time.get_ticks()
+                        if (abs(v_axis) > CONTROLLER_DEADZONE or controller.get_hat(0)[1] != 0) and (
+                                'menu_nav' not in controller_button_times[i] or 
+                                current_time - controller_button_times[i].get('menu_nav', 0) > CONTROLLER_REPEAT_DELAY):
+                            
+                            controller_button_times[i]['menu_nav'] = current_time
+                            
+                            # Check direction
+                            if v_axis < -CONTROLLER_DEADZONE or controller.get_hat(0)[1] > 0:
+                                # Move up
+                                selected_button_index = (selected_button_index - 1) % 3
+                            elif v_axis > CONTROLLER_DEADZONE or controller.get_hat(0)[1] < 0:
+                                # Move down
+                                selected_button_index = (selected_button_index + 1) % 3
+                        
+                        # A or Start button to select
+                        if (controller.get_button(0) or controller.get_button(7)) and (
+                                'select' not in controller_button_states[i] or 
+                                not controller_button_states[i]['select']):
+                            
+                            controller_button_states[i]['select'] = True
+                            
+                            # Single Player button
+                            if selected_button_index == 0:
+                                players = [Player()]
+                                game_mode = SINGLE_PLAYER
+                                
+                                asteroids = []
+                                bullets = []
+                                ufos = []
+                                particles = []
+                                powerups = []
+                                laser_beams = []
+                                scores = [0, 0]
+                                level = 1
+                                game_state = GAME_PLAYING
+                                
+                                # Create initial asteroids
+                                for _ in range(4):
+                                    asteroids.append(Asteroid())
+                                    
+                                ufo_spawn_timer = pygame.time.get_ticks()
+                                ufo_spawn_delay = random.randint(10000, 20000)
+                                powerup_spawn_timer = current_time
+                                
+                            # Co-op Mode button
+                            elif selected_button_index == 1:
+                                players = [Player(0), Player(1)]
+                                game_mode = COOPERATIVE
+                                
+                                asteroids = []
+                                bullets = []
+                                ufos = []
+                                particles = []
+                                powerups = []
+                                laser_beams = []
+                                scores = [0, 0]
+                                level = 1
+                                game_state = GAME_PLAYING
+                                
+                                # Create initial asteroids
+                                for _ in range(4):
+                                    asteroids.append(Asteroid())
+                                    
+                                ufo_spawn_timer = pygame.time.get_ticks()
+                                ufo_spawn_delay = random.randint(10000, 20000)
+                                powerup_spawn_timer = current_time
+                                
+                            # High Scores button
+                            else:
+                                game_state = HIGH_SCORES
+                        
+                        # Track button release
+                        elif not (controller.get_button(0) or controller.get_button(7)):
+                            controller_button_states[i]['select'] = False
+                
+                # Handle keyboard events
                 if event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_UP:
                         # Move selection up
@@ -1334,6 +1471,24 @@ def main():
             
             # Handle high scores screen events
             elif game_state == HIGH_SCORES:
+                # Check controller input
+                for i, controller in enumerate(controllers):
+                    # Only check once per frame
+                    if i == 0:  # Use first controller for menu navigation
+                        # A, B or Start button to return to title
+                        if (controller.get_button(0) or controller.get_button(1) or controller.get_button(7)) and (
+                                'back' not in controller_button_states[i] or 
+                                not controller_button_states[i]['back']):
+                            
+                            controller_button_states[i]['back'] = True
+                            game_state = TITLE_SCREEN
+                            selected_button_index = 0  # Reset to Single Player being selected
+                        
+                        # Track button release
+                        elif not (controller.get_button(0) or controller.get_button(1) or controller.get_button(7)):
+                            controller_button_states[i]['back'] = False
+                
+                # Handle keyboard events
                 if event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_RETURN or event.key == pygame.K_SPACE or event.key == pygame.K_ESCAPE:
                         game_state = TITLE_SCREEN
@@ -1345,8 +1500,49 @@ def main():
                     if back_button.is_clicked(mouse_pos, event):
                         game_state = TITLE_SCREEN
                         selected_button_index = 0  # Reset to Single Player being selected
+            
             # Handle name input screen events
             elif game_state == NAME_INPUT:
+                # Controller input for submitting scores
+                for i, controller in enumerate(controllers):
+                    # Only check once per frame
+                    if i == 0:  # Use first controller for menu interaction
+                        # Start button to submit if names are provided
+                        if controller.get_button(7) and (
+                                'submit' not in controller_button_states[i] or 
+                                not controller_button_states[i]['submit']):
+                            
+                            controller_button_states[i]['submit'] = True
+                            
+                            # Check that names are provided
+                            if game_mode == SINGLE_PLAYER:
+                                if text_inputs[0].text.strip():
+                                    save_score(db_path, text_inputs[0].text, scores[0], 'single')
+                                    game_state = HIGH_SCORES
+                            else:  # COOPERATIVE
+                                if text_inputs[0].text.strip() and text_inputs[1].text.strip():
+                                    # Save both scores with coop mode indicator
+                                    save_score(db_path, text_inputs[0].text, scores[0], 'coop')
+                                    save_score(db_path, text_inputs[1].text, scores[1], 'coop')
+                                    game_state = HIGH_SCORES
+                        
+                        # Track button release
+                        elif not controller.get_button(7):
+                            controller_button_states[i]['submit'] = False
+                        
+                        # Handle tab key functionality with controller
+                        if game_mode == COOPERATIVE and (controller.get_button(6) or controller.get_button(4)) and (
+                                'tab' not in controller_button_states[i] or 
+                                not controller_button_states[i]['tab']):
+                            controller_button_states[i]['tab'] = True
+                            # Toggle between text inputs
+                            text_inputs[0].active = not text_inputs[0].active
+                            text_inputs[1].active = not text_inputs[1].active
+                        
+                        # Track button release
+                        elif not (controller.get_button(6) or controller.get_button(4)):
+                            controller_button_states[i]['tab'] = False
+                
                 # Check for text input events for both inputs
                 for i, text_input in enumerate(text_inputs):
                     if i < (2 if game_mode == COOPERATIVE else 1):  # Only check relevant inputs
@@ -1358,6 +1554,11 @@ def main():
                 if event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_ESCAPE:  # ESC to skip and go to high scores
                         game_state = HIGH_SCORES
+                    
+                    # Tab key to switch between text inputs in coop mode
+                    if game_mode == COOPERATIVE and event.key == pygame.K_TAB:
+                        text_inputs[0].active = not text_inputs[0].active
+                        text_inputs[1].active = not text_inputs[1].active
                 
                 if event.type == pygame.MOUSEBUTTONDOWN:
                     submit_button = draw_name_input_screen(scores, text_inputs, background_asteroids, game_mode)
@@ -1445,14 +1646,76 @@ def main():
             
             # Player 1 controls
             if players[0].lives > 0:
+                # Keyboard controls
                 if keys[pygame.K_LEFT] or keys[pygame.K_a]:
                     players[0].rotate(-1)
                 if keys[pygame.K_RIGHT] or keys[pygame.K_d]:
                     players[0].rotate(1)
                 if keys[pygame.K_UP] or keys[pygame.K_w]:
                     players[0].thrust()
+                
+                # Controller controls for player 1 (first available controller or assigned controller)
+                if len(controllers) > 0:
+                    controller = controllers[0]
                     
-                # Rapid fire shooting for player 1
+                    # Left/Right with left analog stick or D-pad
+                    h_axis = controller.get_axis(0)  # Left stick horizontal
+                    if abs(h_axis) > CONTROLLER_DEADZONE:
+                        players[0].rotate(-1 if h_axis < 0 else 1)
+                    
+                    # D-pad for rotation
+                    if controller.get_hat(0)[0] < 0:  # D-pad left
+                        players[0].rotate(-1)
+                    elif controller.get_hat(0)[0] > 0:  # D-pad right
+                        players[0].rotate(1)
+                    
+                    # Thrust with up on D-pad or forward on left analog stick
+                    v_axis = controller.get_axis(1)  # Left stick vertical
+                    if controller.get_hat(0)[1] > 0 or v_axis < -CONTROLLER_DEADZONE:  # Up on D-pad or up on stick
+                        players[0].thrust()
+                    
+                    # Shoot with A button or right bumper
+                    button_idx = 0  # A button
+                    if (controller.get_button(button_idx) and 
+                            ('fire_p1' not in controller_button_states[0] or 
+                             not controller_button_states[0]['fire_p1'])):
+                        
+                        controller_button_states[0]['fire_p1'] = True
+                        
+                        # Only handle shooting if no laser beam is active for this player
+                        if not any(beam.player_id == 0 for beam in laser_beams):
+                            # If rapid fire is active, don't apply cooldown
+                            if players[0].active_powerup == 'rapid_fire' and players[0].rapid_fire_ammo > 0:
+                                result = players[0].shoot()
+                                if isinstance(result, Bullet):
+                                    bullets.append(result)
+                                    
+                            # Handle shooting with cooldown for other weapons
+                            elif current_time - last_shot_times[0] > shot_cooldown:
+                                result = players[0].shoot()
+                                
+                                # Handle different return types
+                                if result == "laser":
+                                    laser_beams.append(LaserBeam(players[0]))
+                                elif isinstance(result, Bullet):
+                                    bullets.append(result)
+                                    last_shot_times[0] = current_time
+                    
+                    # Track button release
+                    elif not controller.get_button(button_idx):
+                        controller_button_states[0]['fire_p1'] = False
+                    
+                    # Rapid fire handling for controller
+                    if players[0].active_powerup == 'rapid_fire' and players[0].rapid_fire_ammo > 0:
+                        # Use different button (X button) for consistent fire
+                        if controller.get_button(2):  # X button
+                            if current_time - last_shot_times[0] > 100:  # Faster firing rate
+                                result = players[0].shoot()
+                                if isinstance(result, Bullet):
+                                    bullets.append(result)
+                                    last_shot_times[0] = current_time
+                
+                # Rapid fire shooting for player 1 (keyboard)
                 if players[0].active_powerup == 'rapid_fire' and keys[pygame.K_SPACE] and players[0].rapid_fire_ammo > 0:
                     if current_time - last_shot_times[0] > 100:  # Faster firing rate
                         result = players[0].shoot()
@@ -1460,16 +1723,79 @@ def main():
                             bullets.append(result)
                             last_shot_times[0] = current_time
             
-            # Player 2 controls (numpad) - only in co-op mode
+            # Player 2 controls (numpad or second controller) - only in co-op mode
             if game_mode == COOPERATIVE and len(players) > 1 and players[1].lives > 0:
+                # Keyboard controls
                 if keys[pygame.K_KP4]:  # Left
                     players[1].rotate(-1)
                 if keys[pygame.K_KP6]:  # Right
                     players[1].rotate(1)
                 if keys[pygame.K_KP8]:  # Up/Thrust
                     players[1].thrust()
+                
+                # Controller controls for player 2 (second controller if available)
+                controller_idx = min(1, len(controllers) - 1) if len(controllers) > 0 else 0
+                if len(controllers) > 0:
+                    controller = controllers[controller_idx]
                     
-                # Rapid fire shooting for player 2
+                    # Left/Right with left analog stick or D-pad
+                    h_axis = controller.get_axis(0)  # Left stick horizontal
+                    if abs(h_axis) > CONTROLLER_DEADZONE:
+                        players[1].rotate(-1 if h_axis < 0 else 1)
+                    
+                    # D-pad for rotation
+                    if controller.get_hat(0)[0] < 0:  # D-pad left
+                        players[1].rotate(-1)
+                    elif controller.get_hat(0)[0] > 0:  # D-pad right
+                        players[1].rotate(1)
+                    
+                    # Thrust with up on D-pad or forward on left analog stick
+                    v_axis = controller.get_axis(1)  # Left stick vertical
+                    if controller.get_hat(0)[1] > 0 or v_axis < -CONTROLLER_DEADZONE:  # Up on D-pad or up on stick
+                        players[1].thrust()
+                    
+                    # Shoot with A button or right bumper
+                    button_idx = 0  # A button
+                    if (controller.get_button(button_idx) and 
+                            ('fire_p2' not in controller_button_states[controller_idx] or 
+                             not controller_button_states[controller_idx]['fire_p2'])):
+                        
+                        controller_button_states[controller_idx]['fire_p2'] = True
+                        
+                        # Only handle shooting if no laser beam is active for this player
+                        if not any(beam.player_id == 1 for beam in laser_beams):
+                            # If rapid fire is active, don't apply cooldown
+                            if players[1].active_powerup == 'rapid_fire' and players[1].rapid_fire_ammo > 0:
+                                result = players[1].shoot()
+                                if isinstance(result, Bullet):
+                                    bullets.append(result)
+                                    
+                            # Handle shooting with cooldown for other weapons
+                            elif current_time - last_shot_times[1] > shot_cooldown:
+                                result = players[1].shoot()
+                                
+                                # Handle different return types
+                                if result == "laser":
+                                    laser_beams.append(LaserBeam(players[1]))
+                                elif isinstance(result, Bullet):
+                                    bullets.append(result)
+                                    last_shot_times[1] = current_time
+                    
+                    # Track button release
+                    elif not controller.get_button(button_idx):
+                        controller_button_states[controller_idx]['fire_p2'] = False
+                    
+                    # Rapid fire handling for controller
+                    if players[1].active_powerup == 'rapid_fire' and players[1].rapid_fire_ammo > 0:
+                        # Use different button (X button) for consistent fire
+                        if controller.get_button(2):  # X button
+                            if current_time - last_shot_times[1] > 100:  # Faster firing rate
+                                result = players[1].shoot()
+                                if isinstance(result, Bullet):
+                                    bullets.append(result)
+                                    last_shot_times[1] = current_time
+                
+                # Rapid fire shooting for player 2 (keyboard)
                 if players[1].active_powerup == 'rapid_fire' and keys[pygame.K_KP0] and players[1].rapid_fire_ammo > 0:
                     if current_time - last_shot_times[1] > 100:  # Faster firing rate
                         result = players[1].shoot()
@@ -1636,8 +1962,8 @@ def main():
                         player.lives -= 1
                         particles.extend(create_explosion(player.position[0], player.position[1], 2))
                         
-                        # Check for game over
-                        if game_mode == SINGLE_PLAYER or all(p.lives <= 0 for p in players):
+                        # Check for game over - only if lives reach zero
+                        if (game_mode == SINGLE_PLAYER and player.lives <= 0) or all(p.lives <= 0 for p in players):
                             game_state = NAME_INPUT
                             text_inputs[0].text = ""
                             text_inputs[0].active = True
@@ -1645,7 +1971,9 @@ def main():
                                 text_inputs[1].text = ""
                                 text_inputs[1].active = False  # Start with player 1 active
                         else:
-                            player.respawn()
+                            # Only respawn if the player still has lives
+                            if player.lives > 0:
+                                player.respawn()
                             
                         # Create an explosion effect
                         particles.extend(create_explosion(asteroid.position[0], asteroid.position[1], asteroid.size))
@@ -1732,8 +2060,8 @@ def main():
                         particles.extend(create_explosion(player.position[0], player.position[1], 2))
                         particles.extend(create_explosion(ufo.position[0], ufo.position[1], 2))
                         
-                        # Check for game over
-                        if game_mode == SINGLE_PLAYER or all(p.lives <= 0 for p in players):
+                        # Check for game over - only if lives reach zero
+                        if (game_mode == SINGLE_PLAYER and player.lives <= 0) or all(p.lives <= 0 for p in players):
                             game_state = NAME_INPUT
                             text_inputs[0].text = ""
                             text_inputs[0].active = True
@@ -1741,7 +2069,9 @@ def main():
                                 text_inputs[1].text = ""
                                 text_inputs[1].active = False  # Start with player 1 active
                         else:
-                            player.respawn()
+                            # Only respawn if the player still has lives
+                            if player.lives > 0:
+                                player.respawn()
                         
                         ufos.remove(ufo)
                         break
