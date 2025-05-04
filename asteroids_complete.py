@@ -31,6 +31,21 @@ sounds = {
     'menu_change': pygame.mixer.Sound('sounds/menu_change.wav'),
 }
 
+# Sound management functions
+def play_sound(sound_name, loops=0):
+    """Play a sound by name with optional looping"""
+    if sound_name in sounds:
+        sounds[sound_name].play(loops)
+        
+def stop_sound(sound_name):
+    """Stop a specific sound"""
+    if sound_name in sounds:
+        sounds[sound_name].stop()
+        
+def stop_all_sounds():
+    """Stop all currently playing sounds"""
+    pygame.mixer.stop()
+
 # Set volume levels for different sound categories
 for sound in ['shoot', 'ufo_shoot', 'laser', 'thrust']:
     sounds[sound].set_volume(0.4)  # Slightly lower volume for frequent sounds
@@ -843,6 +858,7 @@ class Player:
         self.invulnerable_timer = pygame.time.get_ticks()
         
     def collect_powerup(self, powerup_type):
+        play_sound('powerup')
         current_time = pygame.time.get_ticks()
         
         if powerup_type == 'invincibility':
@@ -1320,17 +1336,20 @@ def main():
                             if v_axis < -CONTROLLER_DEADZONE or controller.get_hat(0)[1] > 0:
                                 # Move up
                                 selected_button_index = (selected_button_index - 1) % 3
+                                play_sound('menu_change')
                             elif v_axis > CONTROLLER_DEADZONE or controller.get_hat(0)[1] < 0:
                                 # Move down
                                 selected_button_index = (selected_button_index + 1) % 3
-                        
+                                play_sound('menu_change')                        
+
                         # A or Start button to select
                         if (controller.get_button(0) or controller.get_button(7)) and (
                                 'select' not in controller_button_states[i] or 
                                 not controller_button_states[i]['select']):
                             
                             controller_button_states[i]['select'] = True
-                            
+                            play_sound('menu_select')                            
+
                             # Single Player button
                             if selected_button_index == 0:
                                 players = [Player()]
@@ -1390,10 +1409,13 @@ def main():
                     if event.key == pygame.K_UP:
                         # Move selection up
                         selected_button_index = (selected_button_index - 1) % 3
+                        play_sound('menu_change')
                     elif event.key == pygame.K_DOWN:
                         # Move selection down
                         selected_button_index = (selected_button_index + 1) % 3
+                        play_sound('menu_change')
                     elif event.key == pygame.K_RETURN or event.key == pygame.K_SPACE:
+                        play_sound('menu_select')
                         # Activate the selected button
                         if selected_button_index == 0:
                             # Single Player button
@@ -1619,7 +1641,13 @@ def main():
                                     result = players[0].shoot()
                                     if isinstance(result, Bullet):
                                         bullets.append(result)
-                                        sounds['shoot'].play()
+                                        if hasattr(result, 'is_nuke') and result.is_nuke:
+                                            play_sound('nuke')
+                                        else:
+                                            play_sound('shoot')
+                                    elif result == "laser":
+                                        laser_beams.append(LaserBeam(players[0]))
+                                        play_sound('laser')
                                 # Handle shooting with cooldown for other weapons
                                 elif current_time - last_shot_times[0] > shot_cooldown:
                                     result = players[0].shoot()
@@ -1656,6 +1684,7 @@ def main():
                     
                     # Escape key to return to title
                     elif event.key == pygame.K_ESCAPE:
+                        stop_all_sounds()
                         game_state = TITLE_SCREEN
                         selected_button_index = 0
         
@@ -1685,6 +1714,8 @@ def main():
                     players[0].rotate(1)
                 if keys[pygame.K_UP] or keys[pygame.K_w]:
                     players[0].thrust()
+                    if random.random() < 0.1:
+                        play_sound('thrust')
                 
                 # Controller controls for player 1 (first available controller or assigned controller)
                 if len(controllers) > 0:
@@ -1721,6 +1752,7 @@ def main():
                                 result = players[0].shoot()
                                 if isinstance(result, Bullet):
                                     bullets.append(result)
+                                    play_sound('shoot')
                                     
                             # Handle shooting with cooldown for other weapons
                             elif current_time - last_shot_times[0] > shot_cooldown:
@@ -1729,8 +1761,18 @@ def main():
                                 # Handle different return types
                                 if result == "laser":
                                     laser_beams.append(LaserBeam(players[0]))
+                                    play_sound('laser')
                                 elif isinstance(result, Bullet):
                                     bullets.append(result)
+                                    
+                                    # Play sound BEFORE updating shot time
+                                    if hasattr(result, 'is_nuke') and result.is_nuke:
+                                        play_sound('nuke')
+                                    else:
+                                        # Play sound directly to ensure it works
+                                        sounds['shoot'].play()
+                                        
+                                    # Update time AFTER playing sound
                                     last_shot_times[0] = current_time
                     
                     # Track button release
@@ -1745,6 +1787,7 @@ def main():
                                 result = players[0].shoot()
                                 if isinstance(result, Bullet):
                                     bullets.append(result)
+                                    play_sound('shoot')
                                     last_shot_times[0] = current_time
                 
                 # Rapid fire shooting for player 1 (keyboard)
@@ -1786,7 +1829,7 @@ def main():
                     if controller.get_hat(0)[1] > 0 or v_axis < -CONTROLLER_DEADZONE:  # Up on D-pad or up on stick
                         players[1].thrust()
                     
-                    # Shoot with A button or right bumper
+                    # Shoot with A button
                     button_idx = 0  # A button
                     if (controller.get_button(button_idx) and 
                             ('fire_p2' not in controller_button_states[controller_idx] or 
@@ -1801,6 +1844,7 @@ def main():
                                 result = players[1].shoot()
                                 if isinstance(result, Bullet):
                                     bullets.append(result)
+                                    play_sound('shoot')
                                     
                             # Handle shooting with cooldown for other weapons
                             elif current_time - last_shot_times[1] > shot_cooldown:
@@ -1809,8 +1853,18 @@ def main():
                                 # Handle different return types
                                 if result == "laser":
                                     laser_beams.append(LaserBeam(players[1]))
+                                    play_sound('laser')
                                 elif isinstance(result, Bullet):
                                     bullets.append(result)
+                                    
+                                    # Play sound BEFORE updating shot time
+                                    if hasattr(result, 'is_nuke') and result.is_nuke:
+                                        play_sound('nuke')
+                                    else:
+                                        # Play sound directly to ensure it works
+                                        sounds['shoot'].play()
+                                        
+                                    # Update time AFTER playing sound
                                     last_shot_times[1] = current_time
                     
                     # Track button release
@@ -1825,6 +1879,7 @@ def main():
                                 result = players[1].shoot()
                                 if isinstance(result, Bullet):
                                     bullets.append(result)
+                                    play_sound('shoot')
                                     last_shot_times[1] = current_time
                 
                 # Rapid fire shooting for player 2 (keyboard)
@@ -1857,7 +1912,10 @@ def main():
                     # Check collision with any UFO
                     for ufo in ufos[:]:
                         if ufo.check_collision(bullet):
+                            if len(ufos) == 1:
+                                stop_sound('ufo')
                             exploded = True
+                            play_sound('explosion_medium')
                             break
                             
                     # If nuke exploded or lifetime is almost over, trigger nuclear explosion
@@ -1866,7 +1924,8 @@ def main():
                         white_surface = pygame.Surface((WIDTH, HEIGHT))
                         white_surface.fill(WHITE)
                         game_surface.blit(white_surface, (0, 0))
-                        
+                        play_sound('nuke')                        
+
                         # Scale and display for the flash effect
                         screen.fill(BLACK)
                         screen.blit(game_surface, (OFFSET_X, OFFSET_Y))
@@ -1936,7 +1995,7 @@ def main():
                         
                         # Remove the asteroid
                         asteroids.remove(asteroid)
-                
+                                        
                 # Check for UFO destruction by laser
                 for ufo in ufos[:]:
                     if laser_beam.check_collision(ufo):
@@ -1992,10 +2051,12 @@ def main():
                         
                     if player.check_collision(asteroid):
                         player.lives -= 1
+                        play_sound('player_explosion')
                         particles.extend(create_explosion(player.position[0], player.position[1], 2))
                         
                         # Check for game over - only if lives reach zero
                         if (game_mode == SINGLE_PLAYER and player.lives <= 0) or all(p.lives <= 0 for p in players):
+                            stop_all_sounds()
                             game_state = NAME_INPUT
                             text_inputs[0].text = ""
                             text_inputs[0].active = True
@@ -2154,6 +2215,7 @@ def main():
                 # UFO shooting
                 if ufo in ufos and ufo_bullet:  # Make sure it wasn't removed
                     bullets.append(ufo_bullet)
+                    play_sound('ufo_shoot')
             
             # Update particles
             for particle in particles[:]:
@@ -2163,6 +2225,8 @@ def main():
                     
             # Check if level is complete
             if len(asteroids) == 0:
+                stop_sound('ufo')
+                play_sound('menu_select')
                 level += 1
                 
                 # In co-op mode, if a player was dead but at least one player survived
@@ -2195,6 +2259,7 @@ def main():
             # Spawn UFO if it's time
             if current_time - ufo_spawn_timer > ufo_spawn_delay and len(ufos) < 1:
                 ufos.append(UFO())
+                play_sound('ufo', -1)
                 ufo_spawn_timer = current_time
                 ufo_spawn_delay = random.randint(10000, 20000)  # 10-20 seconds
                 
