@@ -29,6 +29,7 @@ sounds = {
     'thrust': pygame.mixer.Sound('sounds/thrust.wav'),
     'menu_select': pygame.mixer.Sound('sounds/menu_select.wav'),
     'menu_change': pygame.mixer.Sound('sounds/menu_change.wav'),
+    'nuke_fire': pygame.mixer.Sound('sounds/nuke_fire.wav'),
 }
 
 # Sound management functions
@@ -1924,8 +1925,10 @@ def main():
                         white_surface = pygame.Surface((WIDTH, HEIGHT))
                         white_surface.fill(WHITE)
                         game_surface.blit(white_surface, (0, 0))
-                        play_sound('nuke')                        
-
+                        
+                        # Play the nuke explosion sound
+                        play_sound('nuke')
+                        
                         # Scale and display for the flash effect
                         screen.fill(BLACK)
                         screen.blit(game_surface, (OFFSET_X, OFFSET_Y))
@@ -1979,6 +1982,14 @@ def main():
                 # Check for asteroid destruction by laser
                 for asteroid in asteroids[:]:
                     if laser_beam.check_collision(asteroid):
+                        # Play the appropriate explosion sound based on asteroid size
+                        if asteroid.size == 3:  # Large
+                            play_sound('explosion_large')
+                        elif asteroid.size == 2:  # Medium
+                            play_sound('explosion_medium')
+                        else:  # Small
+                            play_sound('explosion_small')
+                            
                         # Add score to the appropriate player
                         players[player_id].score += (4 - asteroid.size) * 100
                         scores[player_id] += (4 - asteroid.size) * 100
@@ -2051,12 +2062,11 @@ def main():
                         
                     if player.check_collision(asteroid):
                         player.lives -= 1
-                        play_sound('player_explosion')
+                        play_sound('player_explosion')  # Player explosion sound
                         particles.extend(create_explosion(player.position[0], player.position[1], 2))
                         
                         # Check for game over - only if lives reach zero
                         if (game_mode == SINGLE_PLAYER and player.lives <= 0) or all(p.lives <= 0 for p in players):
-                            stop_all_sounds()
                             game_state = NAME_INPUT
                             text_inputs[0].text = ""
                             text_inputs[0].active = True
@@ -2067,6 +2077,14 @@ def main():
                             # Only respawn if the player still has lives
                             if player.lives > 0:
                                 player.respawn()
+                        
+                        # Play explosion sound for asteroid
+                        if asteroid.size == 3:  # Large
+                            play_sound('explosion_large')
+                        elif asteroid.size == 2:  # Medium
+                            play_sound('explosion_medium')
+                        else:  # Small
+                            play_sound('explosion_small')
                             
                         # Create an explosion effect
                         particles.extend(create_explosion(asteroid.position[0], asteroid.position[1], asteroid.size))
@@ -2081,6 +2099,14 @@ def main():
                         distance = math.sqrt((player.position[0] - asteroid.position[0])**2 + 
                                             (player.position[1] - asteroid.position[1])**2)
                         if distance < player.radius + asteroid.radius:
+                            # Play the appropriate explosion sound based on asteroid size
+                            if asteroid.size == 3:  # Large
+                                sounds['explosion_large'].play()
+                            elif asteroid.size == 2:  # Medium
+                                sounds['explosion_medium'].play()
+                            else:  # Small
+                                sounds['explosion_small'].play()
+                                
                             # Add score to the player
                             player.score += (4 - asteroid.size) * 100
                             scores[p_idx] += (4 - asteroid.size) * 100
@@ -2123,6 +2149,8 @@ def main():
                         
                         # Create an explosion effect
                         particles.extend(create_explosion(asteroid.position[0], asteroid.position[1], asteroid.size))
+
+                        play_sound('explosion_medium')
                         
                         # Break the asteroid
                         fragments = asteroid.break_apart()
@@ -2133,7 +2161,7 @@ def main():
                             bullets.remove(bullet)
                         asteroids.remove(asteroid)
                         break
-            
+
             # Update UFOs
             for ufo in ufos[:]:
                 ufo_bullet = ufo.update(players)  # Pass all players for UFO targeting
