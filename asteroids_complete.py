@@ -1133,7 +1133,7 @@ def draw_title_screen(background_asteroids, selected_button_index=0):
     scores_button.draw()
     
     # Draw version number in bottom left corner
-    version_text = pygame.font.Font(None, 24).render("v0.61", True, GREY)
+    version_text = pygame.font.Font(None, 24).render("v0.8", True, GREY)
     game_surface.blit(version_text, (10, HEIGHT - version_text.get_height() - 10))
     
     # Draw controller instructions if controllers are available
@@ -1868,7 +1868,7 @@ def main():
                                     
                                     # Play sound BEFORE updating shot time
                                     if hasattr(result, 'is_nuke') and result.is_nuke:
-                                        play_sound('nuke')
+                                        pass
                                     else:
                                         # Play sound directly to ensure it works
                                         sounds['shoot'].play()
