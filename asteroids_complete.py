@@ -1133,7 +1133,7 @@ def draw_title_screen(background_asteroids, selected_button_index=0):
     scores_button.draw()
     
     # Draw version number in bottom left corner
-    version_text = pygame.font.Font(None, 24).render("v0.8", True, GREY)
+    version_text = pygame.font.Font(None, 24).render("v0.81", True, GREY)
     game_surface.blit(version_text, (10, HEIGHT - version_text.get_height() - 10))
     
     # Draw controller instructions if controllers are available
@@ -2154,6 +2154,7 @@ def main():
                     if collides:
                         # Get player who fired the bullet
                         player_id = bullet.player_id
+                        stop_sound('nuke_fire')
                         
                         # Add score to the appropriate player
                         players[player_id].score += (4 - asteroid.size) * 100
