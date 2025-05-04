@@ -412,6 +412,11 @@ class Bullet:
         self.color = GREY if is_nuke else (WHITE if player_id == 0 else CYAN)
         self.prev_position = [x - vx, y - vy]  # Store previous position for continuous collision detection
         self.player_id = player_id  # Track which player fired the bullet
+        self.sound_channel = None
+
+        # Start playing the continuous sound if it's a nuke
+        if self.is_nuke:
+            self.sound_channel = sounds['nuke_fire'].play(-1)  # -1 means loop indefinitely
         
     def draw(self):
         if self.is_nuke:
@@ -1642,13 +1647,16 @@ def main():
                                     result = players[0].shoot()
                                     if isinstance(result, Bullet):
                                         bullets.append(result)
+                                        last_shot_times[0] = current_time
+
                                         if hasattr(result, 'is_nuke') and result.is_nuke:
-                                            play_sound('nuke')
+                                            pass
                                         else:
                                             play_sound('shoot')
                                     elif result == "laser":
                                         laser_beams.append(LaserBeam(players[0]))
                                         play_sound('laser')
+                                        
                                 # Handle shooting with cooldown for other weapons
                                 elif current_time - last_shot_times[0] > shot_cooldown:
                                     result = players[0].shoot()
@@ -1768,7 +1776,7 @@ def main():
                                     
                                     # Play sound BEFORE updating shot time
                                     if hasattr(result, 'is_nuke') and result.is_nuke:
-                                        play_sound('nuke')
+                                        pass
                                     else:
                                         # Play sound directly to ensure it works
                                         sounds['shoot'].play()
@@ -1921,14 +1929,18 @@ def main():
                             
                     # If nuke exploded or lifetime is almost over, trigger nuclear explosion
                     if exploded or bullet.lifetime < 4:
+                        # Stop the nuke firing sound if it's playing
+                        if bullet.sound_channel:
+                            bullet.sound_channel.stop()
+
+                        # Play the nuke explosion sound
+                        play_sound('nuke')
+
                         # Flash screen
                         white_surface = pygame.Surface((WIDTH, HEIGHT))
                         white_surface.fill(WHITE)
-                        game_surface.blit(white_surface, (0, 0))
-                        
-                        # Play the nuke explosion sound
-                        play_sound('nuke')
-                        
+                        game_surface.blit(white_surface, (0, 0))                        
+                                        
                         # Scale and display for the flash effect
                         screen.fill(BLACK)
                         screen.blit(game_surface, (OFFSET_X, OFFSET_Y))
