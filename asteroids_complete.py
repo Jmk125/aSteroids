@@ -30,6 +30,7 @@ sounds = {
     'menu_select': pygame.mixer.Sound('sounds/menu_select.wav'),
     'menu_change': pygame.mixer.Sound('sounds/menu_change.wav'),
     'nuke_fire': pygame.mixer.Sound('sounds/nuke_fire.wav'),
+    'ufo_explosion': pygame.mixer.Sound('sounds/ufo_explosion.wav'),
 }
 
 # Sound management functions
@@ -403,7 +404,7 @@ class PowerUp:
         return distance < self.radius + player.radius
 
 class Bullet:
-    def __init__(self, x, y, vx, vy, is_nuke=False, player_id=0):
+    def __init__(self, x, y, vx, vy, is_nuke=False, player_id=0, source="player"):
         self.position = [x, y]
         self.velocity = [vx, vy]
         self.radius = 2
@@ -413,6 +414,7 @@ class Bullet:
         self.prev_position = [x - vx, y - vy]  # Store previous position for continuous collision detection
         self.player_id = player_id  # Track which player fired the bullet
         self.sound_channel = None
+        self.source = source  # "player" or "ufo"
 
         # Start playing the continuous sound if it's a nuke
         if self.is_nuke:
@@ -1052,7 +1054,8 @@ class UFO:
         bullet_vx = 5 * math.cos(angle)
         bullet_vy = 5 * math.sin(angle)
         
-        return Bullet(self.position[0], self.position[1], bullet_vx, bullet_vy)
+        return Bullet(self.position[0], self.position[1], bullet_vx, bullet_vy, 
+              is_nuke=False, player_id=-1, source="ufo")
         
     def is_off_screen(self):
         return (self.position[0] < -50 or self.position[0] > WIDTH + 50 or
@@ -2236,7 +2239,8 @@ def main():
                     
                 # Check bullet collisions
                 for bullet in bullets[:]:
-                    if ufo.check_collision(bullet):
+                    # Only check player bullets against UFOs (ignore UFO bullets)
+                    if bullet.source != "ufo" and ufo.check_collision(bullet):
                         # Get player who fired the bullet
                         player_id = bullet.player_id
                         
@@ -2246,11 +2250,15 @@ def main():
                         
                         # Create an explosion effect
                         particles.extend(create_explosion(ufo.position[0], ufo.position[1], 2))
+                        stop_sound('ufo')
+                        play_sound('ufo_explosion')
+                        play_sound('player_explosion')
                         
                         # Remove the bullet and UFO
                         if bullet in bullets:
                             bullets.remove(bullet)
                         ufos.remove(ufo)
+                        stop_sound('ufo')
                         break
                         
                 # UFO shooting
@@ -2300,7 +2308,7 @@ def main():
             # Spawn UFO if it's time
             if current_time - ufo_spawn_timer > ufo_spawn_delay and len(ufos) < 1:
                 ufos.append(UFO())
-                play_sound('ufo', -1)
+                play_sound('ufo')
                 ufo_spawn_timer = current_time
                 ufo_spawn_delay = random.randint(10000, 20000)  # 10-20 seconds
                 
